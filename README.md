@@ -194,3 +194,4 @@ Yedek; içerikleri, ilerlemeyi, yıldızları, hediye kartını, ayarları, foto
 - TypeScript tür denetimi gevşek modda (`strict: false`). `npm run build` tür hatası olsa da derler; `npm run typecheck` uyarı verebilir.
 - Seslendirme tarayıcının yerleşik sesidir; ücretli bir yapay zekâ ses servisi kullanılmaz.
 - Testler masaüstünde Chromium ve WebKit (Safari motoru) ile iPad ekran boyutlarında yapıldı; gerçek iPad'de kısa bir deneme yapmanız önerilir.
+- 
