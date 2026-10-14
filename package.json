@@ -4,12 +4,16 @@
   "version": "1.0.0",
   "description": "Selim City – Okuma Macerası: çocuklar için Türkçe okuma oyunu (PWA)",
   "type": "module",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
     "preview": "vite preview --host",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check-audio": "node scripts/check-audio.mjs",
+    "prebuild": "node scripts/check-audio.mjs"
   },
   "dependencies": {
     "@fontsource/baloo-2": "5.1.0",

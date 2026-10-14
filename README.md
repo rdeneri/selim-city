@@ -100,6 +100,54 @@ netlify deploy --build --prod
 
 Vercel ve Netlify panellerinden kendi alan adınızı (ör. `selimcity.example.com`) ekleyebilirsiniz; HTTPS sertifikası otomatik verilir.
 
+## 4a. Oyun içi sesler (hazır MP3 dosyaları)
+
+Tebrik, ödül, motivasyon ve yönlendirme cümleleri `public/audio/` içindeki hazır MP3 dosyalarıyla çalınır. Harf, hece ve kelime telaffuzu bu dosyalarla **değişmez**; onlar her zaman öğretmen sesiyle (cihaz sesi veya Azure) okunur. API anahtarı gerekmez.
+
+**Klasörler:** `public/audio/basari/` (13 dosya) ve `public/audio/oyun_ici_cumleler/` (12 dosya). Dosya adları koddakiyle birebir aynı olmalıdır (küçük harf, `.mp3`). Vercel Linux üzerinde çalışır ve büyük/küçük harf farkını ayırt eder.
+
+**Kontrol:** `npm run check-audio` hangi dosyaların bulunduğunu, eksik olduğunu veya harf farkı olduğunu listeler. Bu kontrol her `npm run build` öncesinde de otomatik çalışır. Eksik dosya derlemeyi durdurmaz; uygulama o cümleyi önceki seslendirmeyle söyler. Ebeveyn paneli › Ses ve okuma › **Ses dosyalarını kontrol et** aynı kontrolü yayındaki uygulamada yapar.
+
+**GitHub'a göndermeyi unutmayın:**
+
+```bash
+git add public/audio
+git commit -m "Oyun içi ses dosyaları"
+git push
+```
+
+**Hangi olayda hangi ses çalar**
+
+| Olay | Dosya |
+|---|---|
+| İlk açılış (bir kez) | okuma_macerana_hos_geldin |
+| Sonraki açılışlar | merhaba_selim_erdem_yeni_bir_maceraya_hazirmisin |
+| Doğru okuma (sırayla, tekrar etmeden) | aferin_selim_erdem_harika_okudun, aferin_selim_erdem_cok_guzel_okudun, supersin_selim, yasasin_yeni_bir_yildiz_kazandin; kelimelerde ayrıca harikasin_bir_kelime_daha_ogrendin |
+| Bugün yıldızı alınmış kelimeyi yeniden okuma (karaoke) | yukarıdakiler, yıldız sesi hariç |
+| Zorlandıktan sonra doğru okuma | cok_guzel_denedin_boyle_devam_et |
+| Heceleri birleştirme (Yapı Atölyesi) | bravo_heceleri_cok_guzel_birlestirdin |
+| İlk yanlış (kelime) | bu_kelimeyi_bir_kez_daha_deneyelim |
+| İkinci ve sonraki yanlışlar | hic_acele_etme_istedigin_kadar_tekrar_edebilirsin |
+| Okuma Okulu açılışı | haydi_birlikte_okumaya_baslayalim |
+| Kelime Çarkı açılışı | haydi_kelime_carkini_cevirelim |
+| "Birlikte okuyalım" (hece çalışması) | once_heceleri_dinle_sonra_sen_oku |
+| Karaoke "Dinle ve takip et" (girişte bir kez) | once_ben_okuyacagim_sonra_sen_dene |
+| Çocuğun okuma sırası | simdi_sira_sende |
+| Karaokede ilk anlam görseli | simdi_kelimenin_resmine_bakalim |
+| Görev tamamlandı | gorev_tamamlandi_harika_bir_is_cikardin |
+| Görev penceresi kapanınca | hazirmisin_simdi_yeni_bir_gorev_basliyor |
+| Oyundan haritaya dönüş, görev başlamamışsa | yeni_bir_gorev_seni_bekliyor |
+| Gizemli hediye parçası | supriz_gizemli_hediyenin_yeni_bir_parcasi_acildi |
+| Araba ödülü (iki kayıttan biri) | harikasin_sehrine_yeni_bir_araba_kazandin, tebrikler_selim_sehrine_yeni_bir_araba_kazandin |
+| Diğer şehir nesneleri | vay_canina_selim_city_buyumeye_devam_ediyor |
+| Günlük süre doldu | bugun_harika_calistin_selim_erdem_seninle_gurur_duyuyorum |
+
+**Öncelik:** Aynı anda birden fazla ödül olursa yalnızca en önemlisi çalar (hediye parçası > araba > şehir > görev > günlük son > karşılama > yıldız > tebrik > yönerge). Daha önemli bir ses çalarken gelen önemsiz ses atlanır; sesler üst üste binmez.
+
+**iPad ve çevrimdışı:** Sesler yalnızca bir dokunuştan sonra başlar. İlk dokunuştan birkaç saniye sonra dosyalar bir kez indirilip uygulama önbelleğine (`selim-audio`, en fazla 40 dosya, 180 gün) yazılır; sonra internetsiz çalar. Ses dosyaları kurulum paketine eklenmez, uygulamanın ilk yüklenmesi hafif kalır. Ses düzeyi iPad'de de çalışır (Web Audio ile).
+
+**Ebeveyn ayarları:** Ebeveyn paneli › Ses ve okuma › **Oyun içi sesler**: yönlendirme sesleri açık/kapalı, başarı sesleri açık/kapalı, ses düzeyi, örnek dinleme. Kapalıyken MP3 çalınmaz; o cümleler önceki seslendirmeyle söylenir.
+
 ## 4b. Doğal ses (Microsoft Azure AI Speech) kurulumu
 
 Uygulama, Azure'un Türkçe nöral seslerini (varsayılan **tr-TR-EmelNeural**) kullanabilir. Azure anahtarı **yalnızca Vercel sunucu fonksiyonunda** (`api/tts.ts`) ortam değişkeninden okunur; tarayıcıya, React koduna veya GitHub'a hiçbir zaman girmez. Anahtar tanımlanmazsa uygulama cihazın kendi sesiyle çalışmaya devam eder.
@@ -212,6 +260,8 @@ Yedek; içerikleri, ilerlemeyi, yıldızları, hediye kartını, ayarları, foto
 ├── vercel.json           Vercel: derleme, önbellek ve güvenlik başlıkları
 ├── netlify.toml          Netlify: aynı ayarlar
 ├── public/               Uygulama simgeleri (192, 512, maskable, apple-touch-icon)
+├── public/audio/         Hazır oyun içi MP3 sesleri (basari/, oyun_ici_cumleler/)
+├── scripts/check-audio.mjs Ses dosyası kontrolü (npm run check-audio, derleme öncesi otomatik)
 ├── scripts/make_icons.py Simgeleri yeniden üretme betiği (Python + Pillow)
 └── src/
     ├── main.tsx          Giriş: fontlar, stiller, service worker kaydı

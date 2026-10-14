@@ -69,11 +69,23 @@ export default defineConfig(({ mode }) => ({
       workbox: {
         // Uygulama kabuğu, JS/CSS, fontlar ve simgeler önbelleğe alınır: internet olmadan da açılır.
         globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2,json}'],
-        globIgnores: ['**/*.woff'],
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],
         cleanupOutdatedCaches: true,
+        // Ses dosyaları kurulumda indirilmez; ilk kullanımda önbelleğe alınır (en fazla 40 dosya, 180 gün).
+        globIgnores: ['**/*.woff', 'audio/**'],
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith('/audio/'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'selim-audio',
+              expiration: { maxEntries: 40, maxAgeSeconds: 60 * 60 * 24 * 180 },
+              cacheableResponse: { statuses: [200] },
+            },
+          },
+        ],
         clientsClaim: true,
         skipWaiting: true,
       },

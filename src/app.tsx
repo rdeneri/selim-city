@@ -1,7 +1,7 @@
 /**
  * Selim City – Okuma Macerası
  * Tüm oyun mantığı, ekranlar ve 3D şehir bu dosyadadır.
- * Bölümler: Türler · Yardımcılar · Saklama · Ses (cihaz + Azure bulut) · Oyunlar · 3D Dünya · Karaoke · Ebeveyn Paneli · Uygulama
+ * Bölümler: Türler · Yardımcılar · Saklama · Ses (cihaz + Azure bulut + hazır MP3) · Oyunlar · 3D Dünya · Karaoke · Ebeveyn Paneli · Uygulama
  */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
@@ -52,6 +52,7 @@ interface Settings {
   unitGap: number;
   profilePhotoV: number;
   cloudTts: CloudTtsSettings;
+  voiceFx: VoiceFxSettings;
 }
 
 interface DayStat {
@@ -82,6 +83,7 @@ interface AppState {
   wordImages: Record<string, number>;
   cityObjects: Record<string, { earnedAt: string; seen: boolean; word: string }>;
   karaokeLog: Record<string, string>;
+  welcomed: boolean;
 }
 
 interface Recordings {
@@ -351,6 +353,7 @@ function defaultSettings(): Settings {
     unitGap: 450,
     profilePhotoV: 0,
     cloudTts: defaultCloudTts(),
+    voiceFx: defaultVoiceFx(),
   };
 }
 
@@ -373,6 +376,7 @@ function defaultState(): AppState {
     wordImages: {},
     cityObjects: {},
     karaokeLog: {},
+    welcomed: false,
   };
 }
 
@@ -414,6 +418,7 @@ function migrate(raw: any): AppState | null {
       if (!(st.unitGap >= 150 && st.unitGap <= 1000)) st.unitGap = 450;
       st.profilePhotoV = Number(st.profilePhotoV) || 0;
       st.cloudTts = migrateCloudTts(st.cloudTts);
+      st.voiceFx = migrateVoiceFx(st.voiceFx);
       return st as Settings;
     })(),
     items,
@@ -463,6 +468,7 @@ function migrate(raw: any): AppState | null {
     wordImages: raw.wordImages && typeof raw.wordImages === 'object' ? raw.wordImages : {},
     cityObjects: raw.cityObjects && typeof raw.cityObjects === 'object' ? raw.cityObjects : {},
     karaokeLog: raw.karaokeLog && typeof raw.karaokeLog === 'object' ? raw.karaokeLog : {},
+    welcomed: typeof raw.welcomed === 'boolean' ? raw.welcomed : (Number(raw.updatedAt) || 0) > 0,
   };
 }
 
@@ -601,6 +607,7 @@ const Speech = {
   halt() {
     Speech.seq++;
     CloudVoice.stop();
+    AudioManager.stopVoice();
     if (Speech.audio) {
       try { Speech.audio.pause(); } catch (e) { /* yoksay */ }
       Speech.audio = null;
@@ -1304,6 +1311,11 @@ function WheelGame({
   const spinMs = s.animations ? 3600 : 250;
   const micAvailable = s.checkMode !== 'parent' && !!SRClass && !micBlocked;
 
+  // Oyun açılış yönergesi
+  useEffect(() => {
+    if (pool.length) AudioManager.playInstruction(kind === 'kelime' ? 'kelimeCarki' : 'okumaBaslangici');
+  }, []);
+
   // İlk çark görünümü
   useEffect(() => {
     if (pool.length && !labels.length) setLabels(shuffle(pool).slice(0, 10).map((i) => toLabel(i.text, roundCase)));
@@ -1386,7 +1398,7 @@ function WheelGame({
     Sfx.success();
     onCelebrate();
     setHl(null);
-    speakPraise(msg);
+    praiseWith(retries > 0 ? 'caba' : kind === 'kelime' ? 'okumaKelime' : 'okumaHece', msg);
   };
 
   const gentleRetry = (key: 'retry' | 'unclear') => {
@@ -1394,7 +1406,9 @@ function WheelGame({
     setMessage(msg);
     setPhase('reading');
     Sfx.soft();
-    Speech.speak(msg, { role: 'teacher' });
+    if (key === 'retry' && retriesRef.current >= 1) instructWith('zorlandiginda', msg);
+    else if (key === 'retry' && kind === 'kelime') instructWith('tekrarDene', msg);
+    else Speech.speak(msg, { role: 'teacher' });
   };
 
   const startMic = async () => {
@@ -1464,7 +1478,7 @@ function WheelGame({
 
   const readTogether = () => {
     if (!current) return;
-    readItem(current.text, current.id, setHl, 'Birlikte okuyalım.');
+    readItem(current.text, current.id, setHl, { event: 'heceCalismasi', text: 'Birlikte okuyalım.' });
   };
 
   const shownStars = state.totalStars + (pending ? 1 + (retries > 0 ? 1 : 0) : 0);
@@ -4806,7 +4820,9 @@ function BuildGame({
       Sfx.success();
       onCelebrate();
       setStars((x) => x + 1 + (retries > 0 ? 1 : 0));
-      Speech.speak(trLower(round.item.text) + '!', { rate: Speech.contentRate + 0.1 }).then(() => speakPraise(m));
+      Speech.speak(trLower(round.item.text) + '!', { rate: Speech.contentRate + 0.1 }).then(() =>
+        praiseWith(retries > 0 ? 'caba' : 'heceBirlestirme', m)
+      );
       onCommitSuccess(round.item.id, 'tap', retries);
     } else {
       setPhase('wrong');
@@ -4815,7 +4831,7 @@ function BuildGame({
       const m = pick('retry', name);
       setMsg(m);
       Sfx.soft();
-      Speech.speak(m, { role: 'teacher' });
+      instructWith(retries >= 1 ? 'zorlandiginda' : 'tekrarDene', m);
       setTimeout(() => {
         setPlaced([]);
         setPhase('play');
@@ -4963,7 +4979,7 @@ function ListenGame({
       setMsg(m);
       Sfx.success();
       onCelebrate();
-      speakPraise(m);
+      praiseWith(retries > 0 ? 'caba' : 'genelBasari', m);
       onCommitSuccess(round.item.id, 'tap', retries);
     } else {
       setWrong((w) => [...w, o.id]);
@@ -4971,7 +4987,8 @@ function ListenGame({
       Sfx.soft();
       const m = pick('retry', name);
       setMsg(m);
-      Speech.speak(m, { role: 'teacher' }).then(() => say(round.item));
+      const ev: InstructionEvent | null = wrong.length >= 1 ? 'zorlandiginda' : round.item.type === 'kelime' ? 'tekrarDene' : null;
+      (ev ? instructWith(ev, m) : Speech.speak(m, { role: 'teacher' })).then(() => say(round.item));
     }
   };
 
@@ -5062,12 +5079,18 @@ function unitsOf(text: string): { kind: 'hece' | 'harf'; groups: string[][] } {
 }
 
 /** Bir hece/kelimeyi vurgulayarak okur: önce birimler (hece veya harf), sonra bütünü. */
-async function readItem(text: string, itemId: string | null, onPart?: (i: number | null) => void, intro?: string): Promise<void> {
+async function readItem(
+  text: string,
+  itemId: string | null,
+  onPart?: (i: number | null) => void,
+  intro?: string | { event: InstructionEvent; text: string }
+): Promise<void> {
   Speech.stop();
   const my = Speech.seq;
   const alive = () => Speech.seq === my;
   if (intro) {
-    await Speech.speak(intro, { keep: true, role: 'teacher' });
+    if (typeof intro === 'string') await Speech.speak(intro, { keep: true, role: 'teacher' });
+    else await instructWith(intro.event, intro.text, { keep: true });
     if (!alive()) return;
   }
   if (itemId && VoiceCfg.recItems.has(itemId)) {
@@ -5313,6 +5336,7 @@ function VoicePanel({
 
   return (
     <section className="panel">
+      <VoiceFxCard state={state} update={update} />
       <CloudVoiceCard state={state} update={update} />
       <div className="card">
         <h3>Cihaz sesi (yedek) ve ses karakteri</h3>
@@ -6351,6 +6375,8 @@ function KaraokeGame({
   const [onBreak, setOnBreak] = useState(false);
   const listener = useRef<{ stop: () => void } | null>(null);
   const prog = useRef(0);
+  const introDone = useRef(false);
+  const imageHint = useRef(false);
   const pendRef = useRef<any>(null);
   pendRef.current = { pending, item, retries, commit: null as any };
 
@@ -6407,7 +6433,11 @@ function KaraokeGame({
     setCaseMode(s.letterCase === 'mixed' ? (Math.random() < 0.5 ? 'upper' : 'lower') : s.letterCase);
     reset(m, it);
     setMsg(modeMsg(m));
-    if (auto && m === 'dinle') setTimeout(() => playFollow(it), 350);
+    if (auto && m === 'dinle') {
+      const withIntro = !introDone.current;
+      introDone.current = true;
+      setTimeout(() => playFollow(it, withIntro), 350);
+    }
   };
 
   useEffect(() => {
@@ -6420,13 +6450,18 @@ function KaraokeGame({
   }, []);
 
   /* A. Dinle ve Takip Et: renk geçişleri seslendirme olaylarına bağlı */
-  const playFollow = async (it: Item | null = item) => {
+  const playFollow = async (it: Item | null = item, intro = false) => {
     if (!it) return;
     const sy = itemSylls(it);
     Speech.stop();
     const my = Speech.seq;
     const alive = () => Speech.seq === my;
     setPhase('busy');
+    if (intro) {
+      // "Önce ben okuyacağım, sonra sen dene." (yalnızca yönerge; hece telaffuzu öğretmen sesiyle)
+      await AudioManager.playInstruction('dinleVeTakip', { keep: true });
+      if (!alive()) return;
+    }
     setStatus(sy.map(() => 'idle'));
     setWhole(false);
     for (let i = 0; i < sy.length; i++) {
@@ -6448,6 +6483,7 @@ function KaraokeGame({
     if (!alive()) return;
     setPhase('play');
     setMsg('Şimdi sen oku! İstersen tekrar dinle.');
+    instructWith('siraSende', null, { keep: true });
   };
 
   /* C. Dokunarak Oku */
@@ -6486,7 +6522,14 @@ function KaraokeGame({
     Sfx.success();
     const m = pick('karaoke', name);
     setMsg(starToday ? m + ' Bugün bu kelimeden yıldızını aldın; tekrar okumak yine harika!' : m);
-    speakPraise(m);
+    const my = Speech.seq + 1;
+    praiseWith(retries > 0 ? 'caba' : starToday ? 'okumaKelimeYildizsiz' : 'okumaKelime', m).then(() => {
+      // İlk başarıda bir kez: "Şimdi kelimenin resmine bakalım."
+      if (!imageHint.current && Speech.seq <= my + 1) {
+        imageHint.current = true;
+        AudioManager.playInstruction('resmeBakalim', { keep: true });
+      }
+    });
   };
 
   /* B. Ben Okuyorum: mikrofon */
@@ -6527,7 +6570,8 @@ function KaraokeGame({
       setPhase('play');
       const m = pick(v === 'belirsiz' ? 'unclear' : 'retry', name);
       setMsg(m);
-      Speech.speak(m, { role: 'teacher' });
+      if (v === 'belirsiz') Speech.speak(m, { role: 'teacher' });
+      else instructWith(retries >= 1 ? 'zorlandiginda' : 'tekrarDene', m);
     }
   };
 
@@ -6549,7 +6593,7 @@ function KaraokeGame({
     reset(mode);
     const m = pick('retry', name);
     setMsg(m);
-    Speech.speak(m, { role: 'teacher' });
+    instructWith(retries >= 1 ? 'zorlandiginda' : 'tekrarDene', m);
   };
   const parentNextSyl = () => {
     if (!item || phase === 'result') return;
@@ -6581,6 +6625,7 @@ function KaraokeGame({
     setPhase('play');
     setMsg(modeMsg(m));
     if (m === 'dinle') setTimeout(() => playFollow(), 120);
+    if (m === 'oku') instructWith('siraSende', null);
   };
 
   const shownStars = state.totalStars + (pending && !starToday ? 1 + (retries > 0 ? 1 : 0) : 0);
@@ -7243,6 +7288,361 @@ function CloudVoiceCard({ state, update }: { state: AppState; update: (fn: (s: A
       <p className="muted small">
         Gizlilik: Seslendirilecek metin (ör. çocuğun adı, kelimeler, tebrikler) ses üretimi için Microsoft Azure'a gönderilir. Mikrofon kullanılmaz; çocuğun sesi hiçbir zaman gönderilmez.
       </p>
+    </div>
+  );
+}
+
+/* ============================================================
+   OYUN SESLERİ (hazır MP3 dosyaları: public/audio/)
+   Yalnızca başarı, ödül, motivasyon ve yönlendirme cümleleri içindir.
+   Harf, hece ve kelime telaffuzu bu sistemle DEĞİŞMEZ (öğretmen sesi kullanılır).
+   ============================================================ */
+const AUDIO_BASARI = '/audio/basari/';
+const AUDIO_OYUN = '/audio/oyun_ici_cumleler/';
+
+/** Dosya adları depodakiyle birebir aynıdır (uzantı ve küçük harf dahil). */
+const AUDIO_FILES = {
+  aferinHarika: AUDIO_BASARI + 'aferin_selim_erdem_harika_okudun.mp3',
+  bravoHece: AUDIO_BASARI + 'bravo_heceleri_cok_guzel_birlestirdin.mp3',
+  gunSonu: AUDIO_BASARI + 'bugun_harika_calistin_selim_erdem_seninle_gurur_duyuyorum.mp3',
+  cokGuzelDenedin: AUDIO_BASARI + 'cok_guzel_denedin_boyle_devam_et.mp3',
+  gorevTamam: AUDIO_BASARI + 'gorev_tamamlandi_harika_bir_is_cikardin.mp3',
+  araba1: AUDIO_BASARI + 'harikasin_sehrine_yeni_bir_araba_kazandin.mp3',
+  yeniGorevBasliyor: AUDIO_BASARI + 'hazirmisin_simdi_yeni_bir_gorev_basliyor.mp3',
+  hosGeldin: AUDIO_BASARI + 'okuma_macerana_hos_geldin.mp3',
+  supersin: AUDIO_BASARI + 'supersin_selim.mp3',
+  hediyeParca: AUDIO_BASARI + 'supriz_gizemli_hediyenin_yeni_bir_parcasi_acildi.mp3',
+  araba2: AUDIO_BASARI + 'tebrikler_selim_sehrine_yeni_bir_araba_kazandin.mp3',
+  sehirBuyuyor: AUDIO_BASARI + 'vay_canina_selim_city_buyumeye_devam_ediyor.mp3',
+  yildiz: AUDIO_BASARI + 'yasasin_yeni_bir_yildiz_kazandin.mp3',
+  aferinCokGuzel: AUDIO_OYUN + 'aferin_selim_erdem_cok_guzel_okudun.mp3',
+  tekrarDene: AUDIO_OYUN + 'bu_kelimeyi_bir_kez_daha_deneyelim.mp3',
+  birKelimeDaha: AUDIO_OYUN + 'harikasin_bir_kelime_daha_ogrendin.mp3',
+  okumayaBasla: AUDIO_OYUN + 'haydi_birlikte_okumaya_baslayalim.mp3',
+  kelimeCarki: AUDIO_OYUN + 'haydi_kelime_carkini_cevirelim.mp3',
+  aceleEtme: AUDIO_OYUN + 'hic_acele_etme_istedigin_kadar_tekrar_edebilirsin.mp3',
+  merhaba: AUDIO_OYUN + 'merhaba_selim_erdem_yeni_bir_maceraya_hazirmisin.mp3',
+  onceBen: AUDIO_OYUN + 'once_ben_okuyacagim_sonra_sen_dene.mp3',
+  onceHeceler: AUDIO_OYUN + 'once_heceleri_dinle_sonra_sen_oku.mp3',
+  resmeBakalim: AUDIO_OYUN + 'simdi_kelimenin_resmine_bakalim.mp3',
+  siraSende: AUDIO_OYUN + 'simdi_sira_sende.mp3',
+  yeniGorev: AUDIO_OYUN + 'yeni_bir_gorev_seni_bekliyor.mp3',
+};
+type AudioKey = keyof typeof AUDIO_FILES;
+
+/** Başarı olayları: dosya havuzu ve önem sırası (yüksek olan önce çalar, düşük olan bastırılır). */
+const SUCCESS_EVENTS = {
+  hediyeParcasi: { files: ['hediyeParca'], prio: 95 },
+  arabaOdulu: { files: ['araba1', 'araba2'], prio: 90 },
+  sehirGelisimi: { files: ['sehirBuyuyor'], prio: 85 },
+  gorevTamamlandi: { files: ['gorevTamam'], prio: 80 },
+  gunSonu: { files: ['gunSonu'], prio: 70 },
+  hosGeldin: { files: ['hosGeldin'], prio: 60 },
+  yildiz: { files: ['yildiz'], prio: 50 },
+  heceBirlestirme: { files: ['bravoHece'], prio: 45 },
+  caba: { files: ['cokGuzelDenedin'], prio: 45 },
+  /** Doğru okuma (yıldız kazanıldı): tebrikler sırayla değişir, yıldız sesi de sıraya girer. */
+  okumaHece: { files: ['aferinHarika', 'aferinCokGuzel', 'supersin', 'yildiz'], prio: 40 },
+  okumaKelime: { files: ['aferinHarika', 'birKelimeDaha', 'aferinCokGuzel', 'supersin', 'yildiz'], prio: 40 },
+  /** Doğru okuma ama bugün bu kelimeden yıldız alınmış: yıldız sesi çalınmaz. */
+  okumaKelimeYildizsiz: { files: ['aferinHarika', 'birKelimeDaha', 'aferinCokGuzel', 'supersin'], prio: 40 },
+  genelBasari: { files: ['supersin', 'aferinHarika', 'yildiz'], prio: 40 },
+} as const;
+
+const INSTRUCTION_EVENTS = {
+  oyunAcilisi: { files: ['merhaba'], prio: 60 },
+  yeniGorevBasliyor: { files: ['yeniGorevBasliyor'], prio: 55 },
+  yeniGorevBildirimi: { files: ['yeniGorev'], prio: 30 },
+  okumaBaslangici: { files: ['okumayaBasla'], prio: 30 },
+  kelimeCarki: { files: ['kelimeCarki'], prio: 30 },
+  dinleVeTakip: { files: ['onceBen'], prio: 30 },
+  heceCalismasi: { files: ['onceHeceler'], prio: 30 },
+  siraSende: { files: ['siraSende'], prio: 30 },
+  tekrarDene: { files: ['tekrarDene'], prio: 30 },
+  zorlandiginda: { files: ['aceleEtme'], prio: 30 },
+  resmeBakalim: { files: ['resmeBakalim'], prio: 20 },
+} as const;
+
+type SuccessEvent = keyof typeof SUCCESS_EVENTS;
+type InstructionEvent = keyof typeof INSTRUCTION_EVENTS;
+/** played: çaldı (veya bilerek durduruldu) · dropped: daha önemli bir ses çalıyor · unavailable: kapalı, dosya yok ya da çalınamadı */
+type PlayResult = 'played' | 'dropped' | 'unavailable';
+
+interface VoiceFxSettings {
+  instructions: boolean;
+  success: boolean;
+  volume: number;
+}
+function defaultVoiceFx(): VoiceFxSettings {
+  return { instructions: true, success: true, volume: 90 };
+}
+function migrateVoiceFx(raw: any): VoiceFxSettings {
+  const d = defaultVoiceFx();
+  if (!raw || typeof raw !== 'object') return d;
+  return {
+    instructions: raw.instructions !== false,
+    success: raw.success !== false,
+    volume: typeof raw.volume === 'number' && raw.volume >= 0 && raw.volume <= 100 ? raw.volume : d.volume,
+  };
+}
+
+/** Eksik dosya yerine HTML sayfası dönen sunucularda (ör. yerel önizleme) yanlış içeriği ses sanma. */
+function isAudioResponse(r: Response): boolean {
+  const t = (r.headers.get('content-type') || '').toLowerCase();
+  return !t || /audio|mpeg|octet-stream/.test(t);
+}
+
+const AudioManager = {
+  /** Claude önizlemesinde ses dosyaları yoktur; orada eski seslendirme kullanılır. */
+  supported: !(window as any).claude,
+  ctx: null as AudioContext | null,
+  gain: null as GainNode | null,
+  enabled: { instructions: true, success: true },
+  volume: 0.9,
+  buffers: new Map<string, AudioBuffer | null>(),
+  loading: new Map<string, Promise<AudioBuffer | null>>(),
+  current: null as null | { src: AudioBufferSourceNode; prio: number; done: (r: PlayResult) => void },
+  lastFile: {} as Record<string, string>,
+  warmed: false,
+
+  ensure(): AudioContext | null {
+    if (AudioManager.ctx) return AudioManager.ctx;
+    try {
+      const AC = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (!AC) return null;
+      const ctx: AudioContext = Sfx.ctx || new AC();
+      Sfx.ctx = ctx;
+      const g = ctx.createGain();
+      g.gain.value = AudioManager.volume;
+      g.connect(ctx.destination);
+      AudioManager.ctx = ctx;
+      AudioManager.gain = g;
+      return ctx;
+    } catch (e) {
+      return null;
+    }
+  },
+  /** Dokunuşla çağrılır (iPad'de ses ancak kullanıcı etkileşiminden sonra açılabilir). */
+  unlock() {
+    if (!AudioManager.supported) return;
+    const ctx = AudioManager.ensure();
+    if (!ctx) return;
+    try {
+      if (ctx.state !== 'running') ctx.resume();
+      const b = ctx.createBuffer(1, 1, 22050);
+      const s = ctx.createBufferSource();
+      s.buffer = b;
+      s.connect(ctx.destination);
+      s.start(0);
+    } catch (e) { /* yoksay */ }
+    if (!AudioManager.warmed) {
+      AudioManager.warmed = true;
+      setTimeout(() => AudioManager.warmUp(), 4000);
+    }
+  },
+  /** Çevrimdışı kullanım için dosyaları bir kez indirir (service worker önbelleğe alır). Çözümleme yapılmaz. */
+  async warmUp() {
+    if (!AudioManager.supported || navigator.onLine === false) return;
+    // Doğrudan service worker'ın kullandığı önbelleğe yazılır (ilk ziyarette de çalışır). Eksik dosyalar atlanır.
+    let cache: Cache | null = null;
+    try {
+      if ('caches' in window) cache = await caches.open('selim-audio');
+    } catch (e) { /* yoksay */ }
+    for (const path of Object.values(AUDIO_FILES)) {
+      try {
+        if (cache) {
+          if (await cache.match(path)) continue;
+          const r = await fetch(path);
+          if (r.ok && isAudioResponse(r)) await cache.put(path, r);
+        } else await fetch(path, { cache: 'force-cache' });
+      } catch (e) { /* yoksay */ }
+    }
+  },
+  setVoiceVolume(v: number) {
+    AudioManager.volume = Math.max(0, Math.min(1, v));
+    if (AudioManager.gain && AudioManager.ctx) AudioManager.gain.gain.setValueAtTime(AudioManager.volume, AudioManager.ctx.currentTime);
+  },
+  setVoiceEnabled(kind: 'instructions' | 'success' | 'all', on: boolean) {
+    if (kind === 'all' || kind === 'instructions') AudioManager.enabled.instructions = on;
+    if (kind === 'all' || kind === 'success') AudioManager.enabled.success = on;
+    if (!on) AudioManager.stopVoice();
+  },
+  stopVoice() {
+    const c = AudioManager.current;
+    if (!c) return;
+    AudioManager.current = null;
+    try { c.src.stop(); } catch (e) { /* yoksay */ }
+    c.done('played');
+  },
+  load(path: string): Promise<AudioBuffer | null> {
+    if (AudioManager.buffers.has(path)) return Promise.resolve(AudioManager.buffers.get(path) || null);
+    const pending = AudioManager.loading.get(path);
+    if (pending) return pending;
+    const ctx = AudioManager.ensure();
+    const p = (async () => {
+      if (!ctx) return null;
+      try {
+        const r = await fetch(path);
+        if (!r.ok || !isAudioResponse(r)) throw new Error('missing');
+        const ab = await r.arrayBuffer();
+        const buf: AudioBuffer = await new Promise((res, rej) => {
+          const out = ctx.decodeAudioData(ab, res, rej);
+          if (out && (out as any).then) (out as any).then(res, rej);
+        });
+        AudioManager.buffers.set(path, buf);
+        return buf;
+      } catch (e) {
+        AudioManager.buffers.set(path, null);
+        return null;
+      } finally {
+        AudioManager.loading.delete(path);
+      }
+    })();
+    AudioManager.loading.set(path, p);
+    return p;
+  },
+  /** Havuzdan, bir önceki seçimi tekrar etmeyen bir dosya seçer. */
+  pick(event: string, files: readonly string[]): string {
+    const keys = files.length > 1 ? files.filter((f) => f !== AudioManager.lastFile[event]) : files;
+    const k = keys[Math.floor(Math.random() * keys.length)];
+    AudioManager.lastFile[event] = k;
+    return k;
+  },
+  async playFile(path: string, prio: number, keep: boolean): Promise<PlayResult> {
+    if (AudioManager.current && AudioManager.current.prio > prio) return 'dropped';
+    const ctx = AudioManager.ensure();
+    if (!ctx || !AudioManager.gain) return 'unavailable';
+    if (ctx.state !== 'running') {
+      try { await ctx.resume(); } catch (e) { /* yoksay */ }
+      if (ctx.state !== 'running') return 'unavailable';
+    }
+    if (!keep) Speech.halt();
+    const my = Speech.seq;
+    const buf = await AudioManager.load(path);
+    if (!buf) return 'unavailable';
+    if (Speech.seq !== my) return 'played';
+    if (AudioManager.current && AudioManager.current.prio > prio) return 'dropped';
+    AudioManager.stopVoice();
+    return new Promise<PlayResult>((resolve) => {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(AudioManager.gain!);
+      let finished = false;
+      const done = (r: PlayResult) => {
+        if (finished) return;
+        finished = true;
+        if (AudioManager.current && AudioManager.current.src === src) AudioManager.current = null;
+        resolve(r);
+      };
+      AudioManager.current = { src, prio, done };
+      src.onended = () => done('played');
+      setTimeout(() => done('played'), buf.duration * 1000 + 1500);
+      try {
+        src.start();
+      } catch (e) {
+        done('unavailable');
+      }
+    });
+  },
+  async playSuccess(event: SuccessEvent, opts: { keep?: boolean } = {}): Promise<PlayResult> {
+    if (!AudioManager.supported || !AudioManager.enabled.success) return 'unavailable';
+    const ev = SUCCESS_EVENTS[event];
+    const k = AudioManager.pick(event, ev.files) as AudioKey;
+    const r = await AudioManager.playFile(AUDIO_FILES[k], ev.prio, !!opts.keep);
+    if (r === 'unavailable' && ev.files.length > 1) {
+      // Seçilen dosya eksikse havuzdaki diğerlerini dene
+      for (const other of ev.files) {
+        if (other === k || AudioManager.buffers.get(AUDIO_FILES[other as AudioKey]) === null) continue;
+        const r2 = await AudioManager.playFile(AUDIO_FILES[other as AudioKey], ev.prio, !!opts.keep);
+        if (r2 !== 'unavailable') return r2;
+      }
+    }
+    return r;
+  },
+  async playInstruction(event: InstructionEvent, opts: { keep?: boolean } = {}): Promise<PlayResult> {
+    if (!AudioManager.supported || !AudioManager.enabled.instructions) return 'unavailable';
+    const ev = INSTRUCTION_EVENTS[event];
+    const k = AudioManager.pick(event, ev.files) as AudioKey;
+    return AudioManager.playFile(AUDIO_FILES[k], ev.prio, !!opts.keep);
+  },
+  /** Ebeveyn paneli için: hangi dosyalar gerçekten var? */
+  async checkFiles(): Promise<Record<string, boolean>> {
+    const out: Record<string, boolean> = {};
+    for (const path of Object.values(AUDIO_FILES)) {
+      try {
+        const r = await fetch(path, { cache: 'force-cache' });
+        out[path] = r.ok && isAudioResponse(r);
+      } catch (e) {
+        out[path] = false;
+      }
+    }
+    return out;
+  },
+};
+
+/** Başarı sesi: önce MP3; dosya yoksa/kapalıysa önceki sistem (ebeveyn kaydı veya seslendirme). */
+async function praiseWith(event: SuccessEvent, text: string, opts: { keep?: boolean } = {}): Promise<void> {
+  if (VoiceCfg.praise.length && Math.random() < 0.5) return speakPraise(text);
+  const r = await AudioManager.playSuccess(event, opts);
+  if (r === 'unavailable') await speakPraise(text);
+}
+
+/** Yönerge sesi: önce MP3; dosya yoksa/kapalıysa verilen metin seslendirilir (metin yoksa sessiz kalınır). */
+async function instructWith(event: InstructionEvent, text: string | null, opts: { keep?: boolean } = {}): Promise<void> {
+  const r = await AudioManager.playInstruction(event, opts);
+  if (r === 'unavailable' && text) await Speech.speak(text, { role: 'teacher', keep: opts.keep });
+}
+
+/* ---------- Ebeveyn paneli kartı ---------- */
+function VoiceFxCard({ state, update }: { state: AppState; update: (fn: (s: AppState) => AppState) => void }) {
+  const fx = state.settings.voiceFx;
+  const [files, setFiles] = useState<Record<string, boolean> | null>(null);
+  const [checking, setChecking] = useState(false);
+  const set = (p: Partial<VoiceFxSettings>) => update((s) => ({ ...s, settings: { ...s.settings, voiceFx: { ...s.settings.voiceFx, ...p } } }));
+  const check = async () => {
+    setChecking(true);
+    setFiles(await AudioManager.checkFiles());
+    setChecking(false);
+  };
+  const total = Object.keys(AUDIO_FILES).length;
+  const found = files ? Object.values(files).filter(Boolean).length : 0;
+  const missing = files ? Object.keys(files).filter((k) => !files[k]) : [];
+  return (
+    <div className="card">
+      <h3>Oyun içi sesler (hazır ses dosyaları)</h3>
+      {!AudioManager.supported ? (
+        <p className="muted small">Bu önizlemede ses dosyaları bulunmaz; tebrik ve yönergeler cihaz/bulut sesiyle söylenir. Kendi alan adınızda yayınlanan uygulamada çalışır.</p>
+      ) : (
+        <p className="muted small">Tebrik, ödül ve yönlendirme cümleleri hazır MP3 dosyalarıyla çalınır. Harf, hece ve kelime telaffuzu bu ayarlardan etkilenmez. Kapalıyken bu cümleler önceki seslendirmeyle söylenir.</p>
+      )}
+      <label className="check">
+        <input type="checkbox" checked={fx.instructions} onChange={(e) => set({ instructions: e.target.checked })} />
+        Oyun içi yönlendirme sesleri ("Şimdi sıra sende", "Haydi kelime çarkını çevirelim"…)
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={fx.success} onChange={(e) => set({ success: e.target.checked })} />
+        Başarı ve ödül sesleri ("Aferin Selim Erdem", "Görev tamamlandı"…)
+      </label>
+      <label className="field">
+        Ses düzeyi: {fx.volume}
+        <input type="range" min="0" max="100" step="5" value={fx.volume} onChange={(e) => set({ volume: Number(e.target.value) })} />
+      </label>
+      <div className="row gap wrap">
+        <button className="btn ghost" onClick={() => { AudioManager.unlock(); AudioManager.playSuccess('genelBasari'); }} disabled={!fx.success || !AudioManager.supported}>Başarı sesini dinle</button>
+        <button className="btn ghost" onClick={() => { AudioManager.unlock(); AudioManager.playInstruction('siraSende'); }} disabled={!fx.instructions || !AudioManager.supported}>Yönerge sesini dinle</button>
+        <button className="btn ghost" onClick={check} disabled={checking || !AudioManager.supported}>{checking ? 'Kontrol ediliyor…' : 'Ses dosyalarını kontrol et'}</button>
+      </div>
+      {files && (
+        <div className={'audio-check' + (missing.length ? ' warn' : ' ok')}>
+          <b>{found} / {total} dosya bulundu.</b>
+          {missing.length > 0 && (
+            <>
+              <span className="small">Eksik dosyalar yerine önceki seslendirme kullanılır:</span>
+              <ul className="small">{missing.map((m) => <li key={m}><code>public{m}</code></li>)}</ul>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -7959,9 +8359,32 @@ function App() {
   }, [state.settings.cloudTts]);
 
   useEffect(() => {
+    const fx = state.settings.voiceFx;
+    AudioManager.setVoiceVolume(fx.volume / 100);
+    AudioManager.setVoiceEnabled('instructions', fx.instructions);
+    AudioManager.setVoiceEnabled('success', fx.success);
+  }, [state.settings.voiceFx]);
+
+  // Yeni görev duyurusu: oyundan haritaya dönünce, görev henüz başlamadıysa bir kez
+  const announced = useRef(0);
+  const prevScreen = useRef<Screen>('start');
+  useEffect(() => {
+    const prev = prevScreen.current;
+    prevScreen.current = screen;
+    const n = state.city.missionsCompleted + 1;
+    if (screen === 'home' && prev.startsWith('game') && state.city.missionStars === 0 && announced.current !== n && !queue.length) {
+      announced.current = n;
+      setTimeout(() => AudioManager.playInstruction('yeniGorevBildirimi'), 700);
+    }
+  }, [screen]);
+
+  useEffect(() => {
     CloudVoice.cfg = stateRef.current.settings.cloudTts;
     CloudVoice.check();
-    const unlock = () => CloudVoice.unlock();
+    const unlock = () => {
+      CloudVoice.unlock();
+      AudioManager.unlock();
+    };
     document.addEventListener('pointerdown', unlock, { capture: true });
     const online = () => CloudVoice.check();
     window.addEventListener('online', online);
@@ -8071,7 +8494,7 @@ function App() {
     }
     if (elapsed >= state.settings.sessionMinutes * 60) {
       setScreen('rest');
-      Speech.speak(state.settings.childName + ', bugün çok güzel çalıştın! Şimdi biraz dinlenebilirsin.');
+      praiseWith('gunSonu', state.settings.childName + ', bugün çok güzel çalıştın! Şimdi biraz dinlenebilirsin.');
     }
   }, [elapsed]);
 
@@ -8215,7 +8638,8 @@ function App() {
     if (currentCel.kind === 'object') {
       const d = CITY_OBJECTS.find((x) => x.id === currentCel.objId);
       Sfx.chest();
-      Speech.speak(name + ', şehrine ' + (d ? d.phrase : 'yeni bir parça') + ' kazandın!');
+      const text = name + ', şehrine ' + (d ? d.phrase : 'yeni bir parça') + ' kazandın!';
+      AudioManager.playSuccess(currentCel.objId === 'araba' ? 'arabaOdulu' : 'sehirGelisimi').then((r) => r === 'unavailable' && Speech.speak(text));
       return;
     }
     if (currentCel.kind === 'chest') {
@@ -8236,7 +8660,10 @@ function App() {
       if (currentCel.kind === 'mission') parts.push('Görev tamamlandı!');
       if (currentCel.piece != null) parts.push('Gizemli hediyeden bir parça açıldı!');
       if (currentCel.kind === 'mission' && currentCel.unlocks.length) parts.push(currentCel.unlocks[0] + '!');
-      Speech.speak(parts.join(' '));
+      // Aynı anda birden çok ödül: yalnızca en önemlisi çalınır (hediye parçası > görev)
+      AudioManager.playSuccess(currentCel.piece != null ? 'hediyeParcasi' : 'gorevTamamlandi').then(
+        (r) => r === 'unavailable' && Speech.speak(parts.join(' '))
+      );
     }
   }, [currentCel]);
 
@@ -8259,8 +8686,15 @@ function App() {
         animations={animations}
         onStart={() => {
           CloudVoice.unlock();
+          AudioManager.unlock();
           Sfx.success();
-          Speech.speak(state.settings.childName + ', okuma macerana hoş geldin!');
+          announced.current = state.city.missionsCompleted + 1;
+          const welcome = state.settings.childName + ', okuma macerana hoş geldin!';
+          if (!state.welcomed) {
+            // İlk açılış: "Okuma macerana hoş geldin!"
+            praiseWith('hosGeldin', welcome);
+            update((s) => ({ ...s, welcomed: true }));
+          } else instructWith('oyunAcilisi', welcome);
           setScreen('home');
         }}
       />
@@ -8354,7 +8788,20 @@ function App() {
         <ObjectModal key={'o' + queue.length} objId={currentCel.objId} onClose={() => setQueue((q) => q.slice(1))} />
       )}
       {currentCel && currentCel.kind !== 'chest' && currentCel.kind !== 'object' && (
-        <CelebrationModal key={'m' + queue.length} c={currentCel} state={state} animations={animations} onClose={() => setQueue((q) => q.slice(1))} />
+        <CelebrationModal
+          key={'m' + queue.length}
+          c={currentCel}
+          state={state}
+          animations={animations}
+          onClose={() => {
+            const c = currentCel;
+            setQueue((q) => q.slice(1));
+            if (c.kind === 'mission' && !c.won && queue.length === 1) {
+              announced.current = stateRef.current.city.missionsCompleted + 1;
+              AudioManager.playInstruction('yeniGorevBasliyor');
+            }
+          }}
+        />
       )}
       {gate && (
         <PinGate

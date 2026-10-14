@@ -658,3 +658,9 @@ button,a,input,select,label,.lego-brick,.choice,.slot{touch-action:manipulation}
 .prefetch{display:flex;flex-direction:column;gap:4px}
 .pf-bar{height:12px;border-radius:999px;background:var(--surface-2);border:2px solid var(--line);overflow:hidden}
 .pf-bar i{display:block;height:100%;background:var(--ok);transition:width .2s}
+
+/* ---------- Oyun içi ses dosyaları ---------- */
+.audio-check{border-radius:12px;padding:10px 12px;background:var(--surface-2);border-left:6px solid var(--ok);display:flex;flex-direction:column;gap:4px}
+.audio-check.warn{border-left-color:var(--warn)}
+.audio-check ul{margin:0;padding-left:18px}
+.audio-check code{font-size:12px;word-break:break-all}
