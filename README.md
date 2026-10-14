@@ -22,6 +22,7 @@
 - Karaoke okuma: heceler sırayla renklenir (okunan mavi, biten yeşil); Dinle ve Takip Et, Ben Okuyorum, Dokunarak Oku modları
 - Kelimeyi oku, görseli aç: 21 kelime için hazır blok illüstrasyon, diğerleri için kelime kartı, ebeveyn kendi görselini yükleyebilir
 - Kelime Parkı: ARABA, EV, AĞAÇ, KALE, ÇİÇEK/LALE, TOP okununca şehirde kalıcı nesneler belirir
+- Doğal Türkçe nöral ses (Microsoft Azure, tr-TR-EmelNeural): Öğretmen ve Oyun anlatıcısı rolleri; erişilemezse cihaz sesine otomatik dönüş
 - Heceleyerek ve vurgulayarak Türkçe seslendirme, ebeveynin kendi sesiyle kayıt
 - Mikrofonla okuma kontrolü ve ebeveyn onaylı karar (Doğru Okudu / Tekrar Denesin / Atla)
 - Gizemli Hediye: ebeveynin yüklediği fotoğraf, görevlerle parça parça açılır
@@ -99,6 +100,44 @@ netlify deploy --build --prod
 
 Vercel ve Netlify panellerinden kendi alan adınızı (ör. `selimcity.example.com`) ekleyebilirsiniz; HTTPS sertifikası otomatik verilir.
 
+## 4b. Doğal ses (Microsoft Azure AI Speech) kurulumu
+
+Uygulama, Azure'un Türkçe nöral seslerini (varsayılan **tr-TR-EmelNeural**) kullanabilir. Azure anahtarı **yalnızca Vercel sunucu fonksiyonunda** (`api/tts.ts`) ortam değişkeninden okunur; tarayıcıya, React koduna veya GitHub'a hiçbir zaman girmez. Anahtar tanımlanmazsa uygulama cihazın kendi sesiyle çalışmaya devam eder.
+
+**1. Azure'da Speech kaynağı oluşturun**
+
+1. https://portal.azure.com adresinde **Create a resource › Speech** (Azure AI services altında) seçin.
+2. Bölge: **West Europe** (veya size yakın bir bölge). Fiyat katmanı: **Free F0** önerilir: ayda 500.000 karakter nöral ses ücretsizdir ve kota dolduğunda hizmet durur, ek fatura çıkmaz.
+3. Kaynak oluşunca **Keys and Endpoint** sayfasından **KEY 1** ve **Location/Region** değerini not edin.
+
+**2. Anahtarı Vercel'e girin (koda değil)**
+
+1. Vercel'de projenizi açın: **Settings › Environment Variables**.
+2. Şu iki değişkeni ekleyin (Production ve Preview işaretli):
+   - `AZURE_SPEECH_KEY` = KEY 1 değeri
+   - `AZURE_SPEECH_REGION` = bölge (ör. `westeurope`)
+3. **Deployments** sekmesinden son yayını **Redeploy** edin.
+4. Tarayıcıda `https://adresiniz/api/tts?health=1` açın. `{"configured":true}` görmelisiniz. Anahtar bu yanıtta asla gösterilmez.
+
+**3. iPad'de**
+
+1. Ebeveyn paneli › **Ses ve okuma** › "Bağlı: doğal Azure sesleri kullanılıyor." yazısını görün.
+2. Öğretmen ve Oyun anlatıcısı için ses, hız, ton ve ses düzeyini ayarlayıp **Örnek sesi dinle** ile deneyin.
+3. **Sesleri önceden hazırla**'ya dokunun. Onaylı tüm harf, hece, kelime ve tebrik sesleri bir kez indirilip iPad'de saklanır; sonra anında ve internetsiz çalar. Ayarları değiştirdiğinizde veya yeni kelime eklediğinizde tekrar dokunun.
+
+**Bilgisayarda deneme:** `.env.example` dosyasını `.env.local` adıyla kopyalayıp anahtarı oraya yazın (`.env.local` Git'e eklenmez), sonra `npm run dev`.
+
+**Güvenlik ve maliyet**
+
+- Anahtarı kod dosyalarına, GitHub'a veya bir sohbete yazmayın. Anahtar açığa çıkarsa Azure'da **Regenerate Key 1** ile yenileyip Vercel'deki değeri güncelleyin.
+- `/api/tts` yalnızca uygulamanın kendi sayfasından gelen istekleri kabul eder, metin uzunluğunu (220 karakter) ve ses adını sınırlar, basit hız sınırı uygular.
+- Üretilen sesler Vercel CDN'inde ve iPad'de önbelleğe alınır; aynı ses için Azure'a tekrar istek gitmez.
+- Netlify'da bu sunucu fonksiyonu yoktur; Netlify'da yayınlarsanız uygulama cihaz sesiyle çalışır.
+
+**Gizlilik:** Seslendirilecek metin (çocuğun adı, kelimeler, tebrikler) ses üretimi için Microsoft Azure'a gönderilir. Mikrofon bu özellikte kullanılmaz; çocuğun sesi hiçbir yere gönderilmez.
+
+**Nasıl çalışır:** Her hece ve kelimenin tamamı ayrı ses dosyası olarak üretilir. Karaoke vurgusu, o hecenin sesi gerçekten çalmaya başladığında (`playing` olayı) başlar ve ses bittiğinde (`ended` olayı) yeşile döner; tahmini süre kullanılmaz. Bulut erişilemezse (internet yok, anahtar yok, hata) o ses için cihazın `speechSynthesis` sesi kullanılır ve 60 saniye boyunca buluta tekrar denenmez.
+
 ## 5. iPad'e kurulum
 
 1. iPad'de **Safari** ile yayın adresini açın. Ana ekrana ekleme yalnızca Safari'de çalışır.
@@ -168,6 +207,8 @@ Yedek; içerikleri, ilerlemeyi, yıldızları, hediye kartını, ayarları, foto
 ```
 ├── index.html            iPad meta etiketleri (tam ekran, durum çubuğu, simge)
 ├── vite.config.ts        Derleme ve PWA ayarları (manifest.json, service worker)
+├── api/tts.ts            Vercel sunucu fonksiyonu: Azure seslendirme (anahtar yalnızca burada)
+├── .env.example          Yerel deneme için ortam değişkeni şablonu
 ├── vercel.json           Vercel: derleme, önbellek ve güvenlik başlıkları
 ├── netlify.toml          Netlify: aynı ayarlar
 ├── public/               Uygulama simgeleri (192, 512, maskable, apple-touch-icon)
@@ -194,4 +235,3 @@ Yedek; içerikleri, ilerlemeyi, yıldızları, hediye kartını, ayarları, foto
 - TypeScript tür denetimi gevşek modda (`strict: false`). `npm run build` tür hatası olsa da derler; `npm run typecheck` uyarı verebilir.
 - Seslendirme tarayıcının yerleşik sesidir; ücretli bir yapay zekâ ses servisi kullanılmaz.
 - Testler masaüstünde Chromium ve WebKit (Safari motoru) ile iPad ekran boyutlarında yapıldı; gerçek iPad'de kısa bir deneme yapmanız önerilir.
-- 

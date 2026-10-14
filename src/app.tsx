@@ -1,7 +1,7 @@
 /**
  * Selim City – Okuma Macerası
  * Tüm oyun mantığı, ekranlar ve 3D şehir bu dosyadadır.
- * Bölümler: Türler · Yardımcılar · Saklama · Ses · Oyunlar · 3D Dünya · Karaoke · Ebeveyn Paneli · Uygulama
+ * Bölümler: Türler · Yardımcılar · Saklama · Ses (cihaz + Azure bulut) · Oyunlar · 3D Dünya · Karaoke · Ebeveyn Paneli · Uygulama
  */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
@@ -51,6 +51,7 @@ interface Settings {
   contentRate: number;
   unitGap: number;
   profilePhotoV: number;
+  cloudTts: CloudTtsSettings;
 }
 
 interface DayStat {
@@ -349,6 +350,7 @@ function defaultSettings(): Settings {
     contentRate: 0.6,
     unitGap: 450,
     profilePhotoV: 0,
+    cloudTts: defaultCloudTts(),
   };
 }
 
@@ -411,6 +413,7 @@ function migrate(raw: any): AppState | null {
       if (!(st.contentRate >= 0.4 && st.contentRate <= 0.95)) st.contentRate = 0.6;
       if (!(st.unitGap >= 150 && st.unitGap <= 1000)) st.unitGap = 450;
       st.profilePhotoV = Number(st.profilePhotoV) || 0;
+      st.cloudTts = migrateCloudTts(st.cloudTts);
       return st as Settings;
     })(),
     items,
@@ -544,8 +547,17 @@ const Speech = {
   gap: 450,
   seq: 0,
   audio: null as HTMLAudioElement | null,
-  speak(text: string, opts: { rate?: number; pitch?: number; keep?: boolean; onStart?: () => void } = {}): Promise<void> {
+  speak(text: string, opts: { rate?: number; pitch?: number; keep?: boolean; onStart?: () => void; role?: VoiceRole } = {}): Promise<void> {
     if (!opts.keep) Speech.halt();
+    // Doğal bulut sesi hazırsa onu kullan; olmazsa cihaz sesine dön.
+    if (text && CloudVoice.usable()) {
+      const content = opts.rate != null;
+      const role: VoiceRole = opts.role || (content ? 'teacher' : 'narrator');
+      return CloudVoice.say(text, role, content, opts.onStart).then((ok) => (ok ? undefined : Speech.browserSpeak(text, opts)));
+    }
+    return Speech.browserSpeak(text, opts);
+  },
+  browserSpeak(text: string, opts: { rate?: number; pitch?: number; keep?: boolean; onStart?: () => void; role?: VoiceRole } = {}): Promise<void> {
     return new Promise((resolve) => {
       if (!synthSupported || !text) return resolve();
       let done = false;
@@ -588,6 +600,7 @@ const Speech = {
   },
   halt() {
     Speech.seq++;
+    CloudVoice.stop();
     if (Speech.audio) {
       try { Speech.audio.pause(); } catch (e) { /* yoksay */ }
       Speech.audio = null;
@@ -1361,7 +1374,7 @@ function WheelGame({
       setPhase('reading');
       const ask = pick('ask', name);
       setMessage(ask);
-      Speech.speak(ask);
+      Speech.speak(ask, { role: 'teacher' });
     }, spinMs + 150);
   };
 
@@ -1381,7 +1394,7 @@ function WheelGame({
     setMessage(msg);
     setPhase('reading');
     Sfx.soft();
-    Speech.speak(msg);
+    Speech.speak(msg, { role: 'teacher' });
   };
 
   const startMic = async () => {
@@ -4761,7 +4774,7 @@ function BuildGame({
     setPhase('play');
     const m = 'Heceleri sırayla diz, bir kelime yap!';
     setMsg(m);
-    Speech.speak(m);
+    Speech.speak(m, { role: 'teacher' });
   };
 
   useEffect(() => {
@@ -4802,7 +4815,7 @@ function BuildGame({
       const m = pick('retry', name);
       setMsg(m);
       Sfx.soft();
-      Speech.speak(m);
+      Speech.speak(m, { role: 'teacher' });
       setTimeout(() => {
         setPlaced([]);
         setPhase('play');
@@ -4958,7 +4971,7 @@ function ListenGame({
       Sfx.soft();
       const m = pick('retry', name);
       setMsg(m);
-      Speech.speak(m).then(() => say(round.item));
+      Speech.speak(m, { role: 'teacher' }).then(() => say(round.item));
     }
   };
 
@@ -5054,7 +5067,7 @@ async function readItem(text: string, itemId: string | null, onPart?: (i: number
   const my = Speech.seq;
   const alive = () => Speech.seq === my;
   if (intro) {
-    await Speech.speak(intro, { keep: true });
+    await Speech.speak(intro, { keep: true, role: 'teacher' });
     if (!alive()) return;
   }
   if (itemId && VoiceCfg.recItems.has(itemId)) {
@@ -5073,15 +5086,13 @@ async function readItem(text: string, itemId: string | null, onPart?: (i: number
     if (flat.length > 1) {
       for (let i = 0; i < flat.length; i++) {
         if (!alive()) return;
-        onPart && onPart(i);
-        await Speech.speak(trLower(flat[i]), { keep: true, rate: Speech.contentRate });
+        await Speech.speak(trLower(flat[i]), { keep: true, rate: Speech.contentRate, onStart: () => alive() && onPart && onPart(i) });
         await wait(Speech.gap);
       }
       if (!alive()) return;
     }
   }
-  onPart && onPart(-1);
-  await Speech.speak(trLower(text), { keep: true, rate: Math.min(Speech.contentRate + 0.1, 1) });
+  await Speech.speak(trLower(text), { keep: true, rate: Math.min(Speech.contentRate + 0.1, 1), onStart: () => alive() && onPart && onPart(-1) });
   if (alive()) onPart && onPart(null);
 }
 
@@ -5302,8 +5313,9 @@ function VoicePanel({
 
   return (
     <section className="panel">
+      <CloudVoiceCard state={state} update={update} />
       <div className="card">
-        <h3>Ses karakteri</h3>
+        <h3>Cihaz sesi (yedek) ve ses karakteri</h3>
         <p className="muted small">
           Tarayıcının kendi Türkçe sesi kullanılıyor. Karakter, sesin tonunu ve hızını değiştirir; en büyük fark daha kaliteli bir ses seçmekten veya kendi sesinizi kaydetmekten gelir.
         </p>
@@ -6347,7 +6359,7 @@ function KaraokeGame({
   const today = todayKey();
   const starToday = item ? state.karaokeLog[item.id] === today : false;
   const micAvailable = s.checkMode !== 'parent' && !!SRClass && !micBlocked;
-  const noVoice = !synthSupported ? 'Bu tarayıcı seslendirmeyi desteklemiyor.' : !Speech.voice ? 'Türkçe ses bulunamadı; heceler yanlış okunabilir. Ebeveyn: Ses ve okuma sekmesine bakın.' : '';
+  const noVoice = CloudVoice.usable() ? '' : !synthSupported ? 'Bu tarayıcı seslendirmeyi desteklemiyor.' : !Speech.voice ? 'Türkçe ses bulunamadı; heceler yanlış okunabilir. Ebeveyn: Ses ve okuma sekmesine bakın.' : '';
 
   const reset = (m: KMode, it: Item | null = item) => {
     const k = it ? itemSylls(it).length : 0;
@@ -6503,7 +6515,7 @@ function KaraokeGame({
       setPhase('play');
       const m = pick(res.error === 'no-speech' ? 'unclear' : 'retry', name);
       setMsg(hard ? 'Mikrofon kullanılamıyor. Ebeveyn, okumayı "Sonraki Hece" ile takip edebilir.' : m);
-      if (!hard) Speech.speak(m);
+      if (!hard) Speech.speak(m, { role: 'teacher' });
       return;
     }
     const v = evaluate(item.text, res.alts);
@@ -6515,7 +6527,7 @@ function KaraokeGame({
       setPhase('play');
       const m = pick(v === 'belirsiz' ? 'unclear' : 'retry', name);
       setMsg(m);
-      Speech.speak(m);
+      Speech.speak(m, { role: 'teacher' });
     }
   };
 
@@ -6537,7 +6549,7 @@ function KaraokeGame({
     reset(mode);
     const m = pick('retry', name);
     setMsg(m);
-    Speech.speak(m);
+    Speech.speak(m, { role: 'teacher' });
   };
   const parentNextSyl = () => {
     if (!item || phase === 'result') return;
@@ -6802,6 +6814,436 @@ function WordAssetsPanel({ state, update }: { state: AppState; update: (fn: (s: 
         <div className="item-list">{words.map((it) => <WordAssetRow key={it.id} it={it} state={state} update={update} />)}</div>
       )}
     </section>
+  );
+}
+
+/* ============================================================
+   DOĞAL BULUT SESİ (Azure AI Speech, uygulamanın kendi sunucusu üzerinden)
+   - Anahtar istemcide YOKTUR: istekler /api/tts sunucu fonksiyonuna gider.
+   - Üretilen sesler IndexedDB'de saklanır; aynı ses ikinci kez indirilmez.
+   - Bulut erişilemezse cihazın kendi sesi (speechSynthesis) kullanılır.
+   - Mikrofon kullanılmaz; çocuğun sesi hiçbir yere gönderilmez.
+   ============================================================ */
+type VoiceRole = 'teacher' | 'narrator';
+interface RoleCfg {
+  voice: string;
+  rate: number;
+  pitch: number;
+  volume: number;
+}
+interface CloudTtsSettings {
+  enabled: boolean;
+  teacher: RoleCfg;
+  narrator: RoleCfg;
+}
+
+const CLOUD_VOICES: Array<{ id: string; name: string }> = [
+  { id: 'tr-TR-EmelNeural', name: 'Emel (kadın, önerilen)' },
+  { id: 'tr-TR-AhmetNeural', name: 'Ahmet (erkek)' },
+];
+
+function defaultCloudTts(): CloudTtsSettings {
+  return {
+    enabled: true,
+    teacher: { voice: 'tr-TR-EmelNeural', rate: 0.9, pitch: 0, volume: 100 },
+    narrator: { voice: 'tr-TR-EmelNeural', rate: 1.05, pitch: 6, volume: 100 },
+  };
+}
+
+function migrateCloudTts(raw: any): CloudTtsSettings {
+  const d = defaultCloudTts();
+  if (!raw || typeof raw !== 'object') return d;
+  const role = (r: any, def: RoleCfg): RoleCfg => {
+    const o = r && typeof r === 'object' ? r : {};
+    const num = (v: any, lo: number, hi: number, dv: number) => (typeof v === 'number' && v >= lo && v <= hi ? v : dv);
+    return {
+      voice: CLOUD_VOICES.some((v) => v.id === o.voice) ? o.voice : def.voice,
+      rate: num(o.rate, 0.6, 1.4, def.rate),
+      pitch: num(o.pitch, -15, 20, def.pitch),
+      volume: num(o.volume, 30, 100, def.volume),
+    };
+  };
+  return { enabled: raw.enabled !== false, teacher: role(raw.teacher, d.teacher), narrator: role(raw.narrator, d.narrator) };
+}
+
+/** iOS Safari'de sesi açmak için çok kısa sessiz WAV (dokunuşla bir kez çalınır). */
+function silentWav(): string {
+  const n = 800;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const w = (o: number, s: string) => s.split('').forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 16000, true); v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, n * 2, true);
+  let bin = '';
+  new Uint8Array(buf).forEach((b) => (bin += String.fromCharCode(b)));
+  return 'data:audio/wav;base64,' + btoa(bin);
+}
+
+type CloudStatus = 'checking' | 'ready' | 'unconfigured' | 'offline' | 'unavailable';
+
+const CloudVoice = {
+  status: 'checking' as CloudStatus,
+  cfg: defaultCloudTts(),
+  el: null as HTMLAudioElement | null,
+  unlocked: false,
+  failUntil: 0,
+  cur: null as null | ((ok: boolean) => void),
+  mem: new Map<string, { buf: ArrayBuffer; type: string }>(),
+  listeners: new Set<() => void>(),
+  stats: { fetched: 0, cached: 0, failed: 0 },
+
+  emit() {
+    CloudVoice.listeners.forEach((f) => f());
+  },
+  usable(): boolean {
+    return CloudVoice.cfg.enabled && CloudVoice.status === 'ready' && Date.now() > CloudVoice.failUntil;
+  },
+  async check() {
+    if ((window as any).claude) {
+      CloudVoice.status = 'unavailable';
+      return CloudVoice.emit();
+    }
+    CloudVoice.status = 'checking';
+    CloudVoice.emit();
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 5000);
+      const r = await fetch('/api/tts?health=1', { cache: 'no-store', signal: ctl.signal });
+      clearTimeout(t);
+      const j = r.ok ? await r.json().catch(() => null) : null;
+      CloudVoice.status = j && j.configured ? 'ready' : j ? 'unconfigured' : 'unavailable';
+    } catch (e) {
+      CloudVoice.status = navigator.onLine === false ? 'offline' : 'unavailable';
+    }
+    CloudVoice.emit();
+  },
+  /** Dokunuşla çağrılır: iPad'de sonraki seslerin çalabilmesi için ses öğesini açar. */
+  unlock() {
+    if (CloudVoice.unlocked) return;
+    try {
+      if (!CloudVoice.el) {
+        CloudVoice.el = new Audio();
+        CloudVoice.el.setAttribute('playsinline', '');
+        (CloudVoice.el as any).playsInline = true;
+      }
+      CloudVoice.el.src = silentWav();
+      const p = CloudVoice.el.play();
+      if (p && p.then) p.then(() => (CloudVoice.unlocked = true)).catch(() => {});
+      else CloudVoice.unlocked = true;
+    } catch (e) { /* yoksay */ }
+  },
+  params(text: string, role: VoiceRole, content: boolean) {
+    const c = CloudVoice.cfg[role];
+    const rate = content ? c.rate * 0.88 : c.rate;
+    return {
+      t: text.trim(),
+      v: c.voice,
+      r: Math.round((rate - 1) * 100),
+      p: c.pitch,
+      vol: c.volume,
+    };
+  },
+  key(p: { t: string; v: string; r: number; p: number; vol: number }) {
+    return 'tts:' + [p.v, p.r, p.p, p.vol, p.t].join('|');
+  },
+  async getClip(p: { t: string; v: string; r: number; p: number; vol: number }): Promise<{ buf: ArrayBuffer; type: string }> {
+    const k = CloudVoice.key(p);
+    const m = CloudVoice.mem.get(k);
+    if (m) return m;
+    try {
+      const v = await IDB.get(k);
+      if (v && v.buf) {
+        CloudVoice.mem.set(k, v);
+        CloudVoice.stats.cached++;
+        return v;
+      }
+    } catch (e) { /* yoksay */ }
+    const q = new URLSearchParams({ t: p.t, v: p.v, r: String(p.r), p: String(p.p), vol: String(p.vol) });
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 6000);
+    const r = await fetch('/api/tts?' + q.toString(), { signal: ctl.signal });
+    clearTimeout(timer);
+    if (!r.ok) throw new Error('tts ' + r.status);
+    const buf = await r.arrayBuffer();
+    if (!buf.byteLength) throw new Error('empty');
+    const clip = { buf, type: r.headers.get('content-type') || 'audio/mpeg' };
+    CloudVoice.mem.set(k, clip);
+    CloudVoice.stats.fetched++;
+    IDB.set(k, clip).catch(() => {});
+    return clip;
+  },
+  stop() {
+    if (CloudVoice.el) {
+      try { CloudVoice.el.pause(); } catch (e) { /* yoksay */ }
+    }
+    if (CloudVoice.cur) {
+      const c = CloudVoice.cur;
+      CloudVoice.cur = null;
+      c(true);
+    }
+  },
+  /** true: çalındı veya iptal edildi · false: başarısız (cihaz sesine dönülür) */
+  async say(text: string, role: VoiceRole, content: boolean, onStart?: () => void): Promise<boolean> {
+    const my = Speech.seq;
+    let clip: { buf: ArrayBuffer; type: string };
+    try {
+      clip = await CloudVoice.getClip(CloudVoice.params(text, role, content));
+    } catch (e) {
+      CloudVoice.stats.failed++;
+      CloudVoice.failUntil = Date.now() + 60000;
+      CloudVoice.emit();
+      return false;
+    }
+    if (Speech.seq !== my) return true;
+    if (!CloudVoice.el) {
+      CloudVoice.el = new Audio();
+      (CloudVoice.el as any).playsInline = true;
+    }
+    const el = CloudVoice.el;
+    const url = URL.createObjectURL(new Blob([clip.buf], { type: clip.type }));
+    return new Promise<boolean>((resolve) => {
+      let done = false;
+      let started = false;
+      const finish = (ok: boolean) => {
+        if (done) return;
+        done = true;
+        el.onplaying = el.onended = el.onerror = el.onloadedmetadata = null;
+        if (CloudVoice.cur === finish) CloudVoice.cur = null;
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        resolve(ok);
+      };
+      CloudVoice.cur = finish;
+      // Vurgu, ses gerçekten çalmaya başladığında başlar; bitince "ended" olayıyla tamamlanır.
+      el.onplaying = () => {
+        if (!started) {
+          started = true;
+          if (onStart) onStart();
+        }
+      };
+      el.onended = () => finish(true);
+      el.onerror = () => finish(false);
+      el.onloadedmetadata = () => {
+        const d = el.duration;
+        if (isFinite(d) && d > 0) setTimeout(() => finish(true), d * 1000 + 2500);
+      };
+      el.src = url;
+      const pr = el.play();
+      if (pr && pr.catch) pr.catch(() => finish(false));
+    });
+  },
+};
+
+/** Bir metnin bulut sesinin hazır (önbellekte) olup olmadığını kontrol eder. */
+async function cloudIsCached(text: string, role: VoiceRole, content: boolean): Promise<boolean> {
+  const k = CloudVoice.key(CloudVoice.params(text, role, content));
+  if (CloudVoice.mem.has(k)) return true;
+  try {
+    const v = await IDB.get(k);
+    return !!(v && v.buf);
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Uygulamada kullanılan sesleri önceden üretip saklar. */
+function prefetchList(state: AppState): Array<{ text: string; role: VoiceRole; content: boolean }> {
+  const out: Array<{ text: string; role: VoiceRole; content: boolean }> = [];
+  const add = (text: string, role: VoiceRole, content: boolean) => {
+    const t = text.trim();
+    if (t && !out.some((x) => x.text === t && x.role === role && x.content === content)) out.push({ text: t, role, content });
+  };
+  const name = state.settings.childName;
+  state.items
+    .filter((i) => i.approved && i.active && i.type !== 'cumle')
+    .forEach((i) => {
+      add(trLower(i.text), 'teacher', true);
+      if (i.type !== 'harf') {
+        const { groups } = unitsOf(i.text);
+        groups.forEach((g) => g.forEach((u) => add(trLower(u), 'teacher', true)));
+        itemSylls(i).forEach((u) => add(trLower(u), 'teacher', true));
+      }
+    });
+  (['success', 'successHece', 'karaoke', 'effort'] as const).forEach((k) => (MSG as any)[k].forEach((m: string) => add(fill(m, name), 'narrator', false)));
+  (['ask', 'retry', 'unclear'] as const).forEach((k) => (MSG as any)[k].forEach((m: string) => add(fill(m, name), 'teacher', false)));
+  [
+    'Birlikte okuyalım.',
+    'Dinle ve bul.',
+    'Bu kelimeyi yap.',
+    'Heceleri sırayla diz, bir kelime yap!',
+    'Dinle ve heceleri takip et.',
+    'Sıra sende! Heceleri sırayla oku.',
+    'Bir heceye dokun, dinle.',
+  ].forEach((m) => add(m, 'teacher', false));
+  add(name + ', okuma macerana hoş geldin!', 'narrator', false);
+  add(name + ', bugün çok güzel çalıştın! Şimdi biraz dinlenebilirsin.', 'narrator', false);
+  add('Aferin ' + name + '! Gizemli hediyeni kazandın!', 'narrator', false);
+  add('Görev tamamlandı!', 'narrator', false);
+  add('Görev tamamlandı! Gizemli hediyeden bir parça açıldı!', 'narrator', false);
+  CITY_OBJECTS.forEach((d) => add(name + ', şehrine ' + d.phrase + ' kazandın!', 'narrator', false));
+  BADGES.forEach((b) => add('Hazine sandığı açıldı! ' + b.name + ' kazandın!', 'narrator', false));
+  return out;
+}
+
+function useCloudStatus(): CloudStatus {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const f = () => force((n) => n + 1);
+    CloudVoice.listeners.add(f);
+    return () => {
+      CloudVoice.listeners.delete(f);
+    };
+  }, []);
+  return CloudVoice.status;
+}
+
+function CloudVoiceCard({ state, update }: { state: AppState; update: (fn: (s: AppState) => AppState) => void }) {
+  const status = useCloudStatus();
+  const c = state.settings.cloudTts;
+  const [prog, setProg] = useState<null | { done: number; total: number; failed: number; skipped: number }>(null);
+  const [running, setRunning] = useState(false);
+  const stopRef = useRef(false);
+  const set = (fn: (c: CloudTtsSettings) => CloudTtsSettings) =>
+    update((s) => ({ ...s, settings: { ...s.settings, cloudTts: fn(s.settings.cloudTts) } }));
+  const setRole = (role: VoiceRole, p: Partial<RoleCfg>) => set((x) => ({ ...x, [role]: { ...x[role], ...p } }));
+
+  const statusText: Record<CloudStatus, string> = {
+    checking: 'Bağlantı kontrol ediliyor…',
+    ready: 'Bağlı: doğal Azure sesleri kullanılıyor.',
+    unconfigured: 'Sunucu çalışıyor ama Azure anahtarı tanımlı değil. Kurulum talimatına bakın. Şimdilik cihaz sesi kullanılıyor.',
+    offline: 'İnternet yok. Önceden hazırlanmış sesler çalar, diğerleri için cihaz sesi kullanılır.',
+    unavailable: (window as any).claude
+      ? 'Bu önizlemede bulut sesi kullanılamaz (yalnızca kendi alan adınızda yayınlanan uygulamada çalışır). Cihaz sesi kullanılıyor.'
+      : 'Ses sunucusuna ulaşılamadı. Cihaz sesi kullanılıyor.',
+  };
+
+  const sample = async (role: VoiceRole) => {
+    CloudVoice.unlock();
+    const text = role === 'teacher' ? 'Haydi birlikte okuyalım. La… le… lale.' : fill('Yaşasın {ad}! Şehrine yeni bir araba kazandın!', state.settings.childName);
+    if (role === 'teacher') {
+      await Speech.speak('Haydi birlikte okuyalım.', { role: 'teacher' });
+      for (const s of ['la', 'le']) await Speech.speak(s, { keep: true, role: 'teacher', rate: Speech.contentRate });
+      await Speech.speak('lale', { keep: true, role: 'teacher', rate: Speech.contentRate + 0.1 });
+    } else await Speech.speak(text, { role: 'narrator' });
+  };
+
+  const prefetch = async () => {
+    CloudVoice.unlock();
+    const list = prefetchList(state);
+    stopRef.current = false;
+    setRunning(true);
+    let done = 0, failed = 0, skipped = 0;
+    setProg({ done, total: list.length, failed, skipped });
+    let i = 0;
+    const worker = async () => {
+      while (i < list.length && !stopRef.current) {
+        const it = list[i++];
+        try {
+          if (await cloudIsCached(it.text, it.role, it.content)) skipped++;
+          else await CloudVoice.getClip(CloudVoice.params(it.text, it.role, it.content));
+        } catch (e) {
+          failed++;
+        }
+        done++;
+        setProg({ done, total: list.length, failed, skipped });
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    setRunning(false);
+  };
+
+  const clearCache = async () => {
+    if (!(await askConfirm('Kaydedilmiş bulut sesleri silinsin mi? Gerektiğinde yeniden indirilir.'))) return;
+    try {
+      const db = await IDB.open();
+      await new Promise<void>((resolve) => {
+        const tx = db.transaction('kv', 'readwrite');
+        const st = tx.objectStore('kv');
+        const req = st.openCursor();
+        req.onsuccess = () => {
+          const cur = req.result;
+          if (!cur) return;
+          if (String(cur.key).startsWith('tts:')) cur.delete();
+          cur.continue();
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      });
+    } catch (e) { /* yoksay */ }
+    CloudVoice.mem.clear();
+    setProg(null);
+  };
+
+  const roleBox = (role: VoiceRole, title: string, desc: string) => {
+    const r = c[role];
+    return (
+      <div className="role-box">
+        <h4>{title}</h4>
+        <p className="muted small">{desc}</p>
+        <label className="field">
+          Ses
+          <select value={r.voice} onChange={(e) => setRole(role, { voice: e.target.value })}>
+            {CLOUD_VOICES.map((v) => (
+              <option key={v.id} value={v.id}>{v.name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          Konuşma hızı: {r.rate.toFixed(2)}
+          <input type="range" min="0.6" max="1.4" step="0.05" value={r.rate} onChange={(e) => setRole(role, { rate: Number(e.target.value) })} />
+        </label>
+        <label className="field">
+          Ses tonu: {r.pitch > 0 ? '+' : ''}{r.pitch}%
+          <input type="range" min="-15" max="20" step="1" value={r.pitch} onChange={(e) => setRole(role, { pitch: Number(e.target.value) })} />
+        </label>
+        <label className="field">
+          Ses düzeyi: {r.volume}
+          <input type="range" min="30" max="100" step="5" value={r.volume} onChange={(e) => setRole(role, { volume: Number(e.target.value) })} />
+        </label>
+        <button className="btn ghost" onClick={() => sample(role)}>Örnek sesi dinle</button>
+      </div>
+    );
+  };
+
+  return (
+    <div className="card">
+      <h3>Doğal bulut sesi (Microsoft Azure)</h3>
+      <p className={'cloud-status st-' + status}>{statusText[status]}</p>
+      <label className="check">
+        <input type="checkbox" checked={c.enabled} onChange={(e) => set((x) => ({ ...x, enabled: e.target.checked }))} />
+        Bulut sesini kullan (kapalıyken her zaman cihaz sesi kullanılır)
+      </label>
+      <div className="role-grid">
+        {roleBox('teacher', 'Öğretmen', 'Harf, hece, kelime ve okuma yönergeleri: sakin ve anlaşılır.')}
+        {roleBox('narrator', 'Oyun anlatıcısı', 'Ödüller, görevler ve kutlamalar: daha canlı ve neşeli.')}
+      </div>
+      <p className="muted small">
+        Türkçe nöral sesler (Emel, Ahmet) duygu stili desteklemez; öğretmen ve anlatıcı farkı hız, ton ve ses düzeyiyle oluşturulur.
+      </p>
+      <h4>Sesleri önceden hazırla</h4>
+      <p className="muted small">
+        Onaylı harf, hece ve kelimelerin, tüm hecelerin ve tebrik mesajlarının sesleri bir kez indirilip bu cihazda saklanır. Sonrasında iPad'de anında ve internetsiz çalar. Ayarları (ses, hız, ton, düzey) değiştirirseniz yeniden hazırlayın.
+      </p>
+      <div className="row gap wrap">
+        <button className="btn primary" onClick={prefetch} disabled={running || status !== 'ready' || !c.enabled}>
+          {running ? 'Hazırlanıyor…' : 'Sesleri önceden hazırla'}
+        </button>
+        {running && <button className="btn ghost" onClick={() => (stopRef.current = true)}>Durdur</button>}
+        <button className="btn ghost" onClick={clearCache} disabled={running}>Kayıtlı sesleri temizle</button>
+      </div>
+      {prog && (
+        <div className="prefetch">
+          <div className="pf-bar"><i style={{ width: Math.round((prog.done / Math.max(1, prog.total)) * 100) + '%' }} /></div>
+          <span className="small">
+            {prog.done} / {prog.total} ses · {prog.skipped} zaten hazırdı{prog.failed ? ' · ' + prog.failed + ' başarısız' : ''}
+          </span>
+        </div>
+      )}
+      <p className="muted small">
+        Gizlilik: Seslendirilecek metin (ör. çocuğun adı, kelimeler, tebrikler) ses üretimi için Microsoft Azure'a gönderilir. Mikrofon kullanılmaz; çocuğun sesi hiçbir zaman gönderilmez.
+      </p>
+    </div>
   );
 }
 
@@ -7513,6 +7955,23 @@ function App() {
   }, [voices, state.settings]);
 
   useEffect(() => {
+    CloudVoice.cfg = state.settings.cloudTts;
+  }, [state.settings.cloudTts]);
+
+  useEffect(() => {
+    CloudVoice.cfg = stateRef.current.settings.cloudTts;
+    CloudVoice.check();
+    const unlock = () => CloudVoice.unlock();
+    document.addEventListener('pointerdown', unlock, { capture: true });
+    const online = () => CloudVoice.check();
+    window.addEventListener('online', online);
+    return () => {
+      document.removeEventListener('pointerdown', unlock, { capture: true } as any);
+      window.removeEventListener('online', online);
+    };
+  }, []);
+
+  useEffect(() => {
     VoiceCfg.recItems = new Set(state.recordings.items);
     VoiceCfg.praise = state.recordings.praise;
   }, [state.recordings]);
@@ -7799,6 +8258,7 @@ function App() {
         state={state}
         animations={animations}
         onStart={() => {
+          CloudVoice.unlock();
           Sfx.success();
           Speech.speak(state.settings.childName + ', okuma macerana hoş geldin!');
           setScreen('home');
