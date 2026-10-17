@@ -726,3 +726,19 @@ button,a,input,select,label,.lego-brick,.choice,.slot{touch-action:manipulation}
   .box-screen .box-row.n4{grid-template-columns:repeat(4,1fr)}
 }
 .thumb-fail{width:56%;aspect-ratio:1;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:"Lilita One",sans-serif;font-size:32px;color:#9AA6BD;border:4px dashed #C9D6EE}
+
+/* ---------- Garaj: karakter ---------- */
+.showroom-wrap{display:flex;flex-direction:column;gap:8px}
+.anim-bar{display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
+.anim-bar button{border:3px solid var(--navy);background:#fff;color:var(--navy);border-radius:999px;padding:4px 14px;font-weight:800;min-height:42px;box-shadow:0 3px 0 var(--navy)}
+.anim-bar button.on{background:var(--gold)}
+.g-sub{margin:4px 0 0;color:#fff;-webkit-text-stroke:1px var(--navy);paint-order:stroke fill;text-shadow:0 2px 0 var(--navy)}
+.g-grid.g-big{grid-template-columns:repeat(2,minmax(0,220px));justify-content:center}
+.g-note{margin:0;font-size:14px;font-weight:700;color:var(--navy);background:rgba(255,255,255,.85);border-radius:12px;padding:6px 10px}
+.g-tabs{scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch}
+.g-tabs button{scroll-snap-align:start;flex:none}
+@media (orientation:landscape) and (min-width:700px){
+  .garage-screen > .showroom-wrap:not(.topbar){grid-column:1;grid-row:2 / span 8;position:sticky;top:12px;align-self:start}
+  .garage-screen > .showroom-wrap .showroom{height:min(62vh,480px)}
+  .garage-screen > :not(.topbar):not(.showroom-wrap){grid-column:2}
+}

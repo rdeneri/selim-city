@@ -1,7 +1,7 @@
 /**
  * Selim City – Okuma Macerası
  * Tüm oyun mantığı, ekranlar ve 3D şehir bu dosyadadır.
- * Bölümler: Türler · Yardımcılar · Saklama ve veri güvenliği · Ses · Oyunlar · 3D Dünya · Karaoke · Kelime Kutuları · Ebeveyn Paneli · Uygulama
+ * Bölümler: Türler · Yardımcılar · Saklama ve veri güvenliği · Ses · Oyunlar · 3D Dünya ve karakter · Karaoke · Kelime Kutuları · Ebeveyn Paneli · Uygulama
  */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
@@ -253,7 +253,7 @@ function itemStatus(it: Item): Status {
   return 'pekistiriliyor';
 }
 
-function validateContent(type: ContentType, raw: string): { ok: true; text: string } | { ok: false; error: string } {
+function validateContent(type: ContentType, raw: string): { ok: true; text: string; error?: string } | { ok: false; error: string; text?: string } {
   const text = raw.trim().replace(/\s+/g, ' ');
   if (!text) return { ok: false, error: 'Boş' };
   const onlyLetters = new RegExp('^[' + LETTER_CLASS + ']+$');
@@ -674,7 +674,7 @@ const Speech = {
   },
 };
 
-type ListenResult = { ok: true; alts: string[] } | { ok: false; error: string };
+type ListenResult = { ok: true; alts: string[]; error?: string } | { ok: false; error: string; alts?: string[] };
 
 function listenOnce(): { promise: Promise<ListenResult>; stop: () => void } {
   if (!SRClass) {
@@ -1638,7 +1638,7 @@ const CARS: Array<Unlockable & { special?: boolean; real?: boolean }> = [
 ];
 
 const OUTFITS: Unlockable[] = [
-  { id: 'gunluk', name: 'Günlük tişört', need: 0 },
+  { id: 'gunluk', name: 'Kostüm yok', need: 0 },
   { id: 'futbol', name: 'Futbolcu forması', need: 2 },
   { id: 'asci', name: 'Aşçı önlüğü', need: 4 },
   { id: 'pilot', name: 'Pilot ceketi', need: 6 },
@@ -1646,17 +1646,64 @@ const OUTFITS: Unlockable[] = [
   { id: 'astronot', name: 'Astronot giysisi', need: 13 },
 ];
 
-const SKINS = ['#FFD43B', '#F6D2B4', '#E0AC83', '#A8704A'];
+const SKINS = ['#FFD43B', '#F6D2B4', '#E0AC83', '#C68642', '#A8704A', '#7A4A2A'];
 const HAIRS: Array<{ id: string; name: string }> = [
   { id: 'kisa', name: 'Kısa saç' },
   { id: 'kivircik', name: 'Kıvırcık' },
   { id: 'kep', name: 'Kep' },
   { id: 'yok', name: 'Saçsız' },
 ];
-const HAIR_COLORS = ['#5B3A1E', '#1D2B4F', '#E3A33B', '#C2462E'];
-const BLOCK_COLORS = ['#4AA8FF', '#FF6F61', '#2DBE9B', '#FFC23D', '#8A6CFF', '#1D2B4F', '#FF9F45', '#F2F2F2'];
+const HAIR_COLORS = ['#5B3A1E', '#1D2B4F', '#E3A33B', '#C2462E', '#7A4A1E', '#F2D16B', '#8A6CFF', '#F06BA8'];
+const BLOCK_COLORS = ['#4AA8FF', '#FF6F61', '#2DBE9B', '#FFC23D', '#8A6CFF', '#1D2B4F', '#FF9F45', '#F2F2F2', '#F06BA8', '#7A4A2A'];
+const SHOE_COLORS = ['#1D2B4F', '#F4F6FA', '#E8473B', '#F06BA8', '#8B5A2B', '#2DBE9B', '#FFC23D', '#8A6CFF'];
+const TOPS = [
+  { id: 'tisort', name: 'Tişört' },
+  { id: 'gomlek', name: 'Gömlek' },
+  { id: 'mont', name: 'Mont' },
+  { id: 'sweatshirt', name: 'Sweatshirt' },
+];
+const BOTTOMS = [
+  { id: 'pantolon', name: 'Pantolon' },
+  { id: 'sort', name: 'Şort' },
+  { id: 'etek', name: 'Etek' },
+];
+const SHOES = [
+  { id: 'spor', name: 'Spor ayakkabı' },
+  { id: 'bot', name: 'Bot' },
+  { id: 'sandalet', name: 'Sandalet' },
+  { id: 'cizme', name: 'Çizme' },
+];
+const FACES = [
+  { id: 'gulen', name: 'Gülümseme' },
+  { id: 'kahkaha', name: 'Kahkaha' },
+  { id: 'saskin', name: 'Şaşkın' },
+  { id: 'gozkirpan', name: 'Göz kırpan' },
+  { id: 'havali', name: 'Havalı' },
+];
+/** Başlangıç görünümleri: yalnızca bir başlangıç önerisidir, hiçbir seçeneği kısıtlamaz. */
+const GENDER_PRESETS: Record<'erkek' | 'kiz', Partial<Avatar>> = {
+  erkek: { hair: 'kisa', hairColor: '#5B3A1E', top: 'tisort', shirt: '#4AA8FF', bottom: 'pantolon', pants: '#1D2B4F', shoes: 'spor', shoeColor: '#1D2B4F', hat: 'yok', face: 'gulen', outfit: 'gunluk' },
+  kiz: { hair: 'atkuyrugu', hairColor: '#7A4A1E', top: 'sweatshirt', shirt: '#F06BA8', bottom: 'etek', pants: '#8A6CFF', shoes: 'spor', shoeColor: '#F06BA8', hat: 'fiyonk', face: 'gulen', outfit: 'gunluk' },
+};
 
-interface Avatar { skin: string; hair: string; hairColor: string; shirt: string; pants: string; outfit: string; car: string; hat?: string; accessory?: string; carColor?: string }
+interface Avatar {
+  skin: string;
+  hair: string;
+  hairColor: string;
+  shirt: string;
+  pants: string;
+  outfit: string;
+  car: string;
+  hat?: string;
+  accessory?: string;
+  carColor?: string;
+  gender?: 'erkek' | 'kiz';
+  top?: string;
+  bottom?: string;
+  shoes?: string;
+  shoeColor?: string;
+  face?: string;
+}
 
 interface CityState { missionsCompleted: number; missionStars: number; avatar: Avatar }
 
@@ -1682,7 +1729,7 @@ function defaultCity(): CityState {
   return {
     missionsCompleted: 0,
     missionStars: 0,
-    avatar: { skin: SKINS[0], hair: 'kisa', hairColor: HAIR_COLORS[0], shirt: '#4AA8FF', pants: '#1D2B4F', outfit: 'gunluk', car: 'mini', hat: 'yok', accessory: 'yok' },
+    avatar: { skin: SKINS[0], hair: 'kisa', hairColor: HAIR_COLORS[0], shirt: '#4AA8FF', pants: '#1D2B4F', outfit: 'gunluk', car: 'mini', hat: 'yok', accessory: 'yok', gender: 'erkek', top: 'tisort', bottom: 'pantolon', shoes: 'spor', shoeColor: '#1D2B4F', face: 'gulen' },
   };
 }
 
@@ -2464,7 +2511,7 @@ type Celebration =
   | { kind: 'chest'; badge: string }
   | { kind: 'mission'; number: number; unlocks: string[]; piece: number | null; won: boolean }
   | { kind: 'piece'; piece: number | null; won: boolean }
-  | { kind: 'object'; objId: string };
+  | { kind: 'object'; objId: string; won?: boolean; piece?: number | null };
 
 function CelebrationModal({
   c,
@@ -2874,6 +2921,8 @@ function canvasTex(w: number, h: number, draw: (ctx: CanvasRenderingContext2D) =
 const HATS: Unlockable[] = [
   { id: 'yok', name: 'Şapkasız', need: 0 },
   { id: 'kep', name: 'Kep', need: 0 },
+  { id: 'fiyonk', name: 'Fiyonk', need: 0 },
+  { id: 'cicek', name: 'Çiçek tacı', need: 0 },
   { id: 'baret', name: 'Yapı bareti', need: 1 },
   { id: 'kasif', name: 'Kaşif şapkası', need: 4 },
   { id: 'asci', name: 'Aşçı şapkası', need: 6 },
@@ -2892,38 +2941,109 @@ const HAIR_STYLES: Array<{ id: string; name: string }> = [
   { id: 'kisa', name: 'Kısa' },
   { id: 'kivircik', name: 'Kıvırcık' },
   { id: 'uzun', name: 'Uzun' },
+  { id: 'atkuyrugu', name: 'At kuyruğu' },
+  { id: 'orgu', name: 'İki örgü' },
+  { id: 'topuz', name: 'Topuz' },
   { id: 'yok', name: 'Saçsız' },
 ];
 
 /* ---------- Blok karakter (3D) ---------- */
-function faceTexture(): any {
-  return (
-    GEO.face ||
-    (GEO.face = canvasTex(256, 256, (ctx) => {
-      ctx.clearRect(0, 0, 256, 256);
-      ctx.fillStyle = '#1B1F3B';
+function faceTexture(expr = 'gulen', lashes = false): any {
+  const key = 'face-' + expr + (lashes ? '-l' : '');
+  if (GEO[key]) return GEO[key];
+  GEO[key] = canvasTex(256, 256, (ctx) => {
+    const N = '#1B1F3B';
+    ctx.clearRect(0, 0, 256, 256);
+    ctx.fillStyle = N;
+    ctx.strokeStyle = N;
+    ctx.lineCap = 'round';
+    const eye = (x: number) => {
       ctx.beginPath();
-      ctx.ellipse(88, 104, 15, 20, 0, 0, Math.PI * 2);
-      ctx.ellipse(168, 104, 15, 20, 0, 0, Math.PI * 2);
+      ctx.ellipse(x, 104, 15, 20, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#fff';
       ctx.beginPath();
-      ctx.arc(93, 97, 5, 0, Math.PI * 2);
-      ctx.arc(173, 97, 5, 0, Math.PI * 2);
+      ctx.arc(x + 5, 97, 5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = '#1B1F3B';
+      ctx.fillStyle = N;
+    };
+    const happyEye = (x: number) => {
+      ctx.lineWidth = 10;
+      ctx.beginPath();
+      ctx.arc(x, 112, 16, Math.PI * 1.1, Math.PI * 1.9);
+      ctx.stroke();
+    };
+    if (expr === 'kahkaha') {
+      happyEye(88);
+      happyEye(168);
+      ctx.beginPath();
+      ctx.moveTo(80, 138);
+      ctx.quadraticCurveTo(128, 138, 176, 138);
+      ctx.quadraticCurveTo(170, 205, 128, 205);
+      ctx.quadraticCurveTo(86, 205, 80, 138);
+      ctx.fill();
+      ctx.fillStyle = '#FF7A8A';
+      ctx.beginPath();
+      ctx.ellipse(128, 188, 24, 12, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (expr === 'saskin') {
+      eye(88);
+      eye(168);
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.arc(88, 70, 18, Math.PI * 1.15, Math.PI * 1.85);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(168, 70, 18, Math.PI * 1.15, Math.PI * 1.85);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(128, 168, 16, 20, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (expr === 'gozkirpan') {
+      eye(88);
+      ctx.lineWidth = 10;
+      ctx.beginPath();
+      ctx.moveTo(152, 106);
+      ctx.lineTo(184, 106);
+      ctx.stroke();
       ctx.lineWidth = 11;
-      ctx.lineCap = 'round';
       ctx.beginPath();
       ctx.arc(128, 140, 46, 0.2 * Math.PI, 0.8 * Math.PI);
       ctx.stroke();
-      ctx.fillStyle = 'rgba(255,120,120,0.35)';
+    } else if (expr === 'havali') {
+      ctx.fillRect(66, 92, 48, 26);
+      ctx.fillRect(142, 92, 48, 26);
+      ctx.fillRect(110, 98, 36, 8);
+      ctx.lineWidth = 10;
       ctx.beginPath();
-      ctx.arc(62, 150, 14, 0, Math.PI * 2);
-      ctx.arc(194, 150, 14, 0, Math.PI * 2);
-      ctx.fill();
-    }))
-  );
+      ctx.moveTo(100, 168);
+      ctx.quadraticCurveTo(140, 182, 168, 156);
+      ctx.stroke();
+    } else {
+      eye(88);
+      eye(168);
+      ctx.lineWidth = 11;
+      ctx.beginPath();
+      ctx.arc(128, 140, 46, 0.2 * Math.PI, 0.8 * Math.PI);
+      ctx.stroke();
+    }
+    if (lashes && expr !== 'havali' && expr !== 'kahkaha') {
+      ctx.lineWidth = 5;
+      [[66, 86], [72, 80], [190, 86], [184, 80]].forEach(([x, y], i) => {
+        if (expr === 'gozkirpan' && x > 128) return;
+        ctx.beginPath();
+        ctx.moveTo(x + (x < 128 ? 8 : -8), y + 8);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+      });
+    }
+    ctx.fillStyle = 'rgba(255,120,120,0.35)';
+    ctx.beginPath();
+    ctx.arc(62, 150, 14, 0, Math.PI * 2);
+    ctx.arc(194, 150, 14, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  return GEO[key];
 }
 
 function torsoDecal(outfit: string): any {
@@ -2931,7 +3051,54 @@ function torsoDecal(outfit: string): any {
   if (GEO[key]) return GEO[key];
   GEO[key] = canvasTex(256, 256, (ctx) => {
     ctx.clearRect(0, 0, 256, 256);
-    if (outfit === 'gunluk') {
+    if (outfit === 'top-gomlek') {
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.moveTo(78, 0);
+      ctx.lineTo(128, 48);
+      ctx.lineTo(102, 70);
+      ctx.closePath();
+      ctx.moveTo(178, 0);
+      ctx.lineTo(128, 48);
+      ctx.lineTo(154, 70);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = 'rgba(27,31,59,0.55)';
+      for (let i = 0; i < 4; i++) {
+        ctx.beginPath();
+        ctx.arc(128, 82 + i * 42, 7, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.strokeStyle = 'rgba(27,31,59,0.35)';
+      ctx.lineWidth = 5;
+      ctx.strokeRect(160, 92, 44, 40);
+    } else if (outfit === 'top-mont') {
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.fillRect(0, 0, 256, 30);
+      ctx.fillStyle = '#D9DEE8';
+      ctx.fillRect(122, 0, 12, 256);
+      for (let y = 20; y < 256; y += 18) ctx.fillRect(116, y, 24, 5);
+      ctx.fillStyle = 'rgba(0,0,0,0.2)';
+      ctx.fillRect(40, 150, 56, 12);
+      ctx.fillRect(160, 150, 56, 12);
+    } else if (outfit === 'top-sweatshirt') {
+      ctx.fillStyle = 'rgba(255,255,255,0.28)';
+      ctx.beginPath();
+      ctx.moveTo(62, 150);
+      ctx.lineTo(194, 150);
+      ctx.lineTo(208, 236);
+      ctx.lineTo(48, 236);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(108, 10);
+      ctx.lineTo(104, 92);
+      ctx.moveTo(148, 10);
+      ctx.lineTo(152, 92);
+      ctx.stroke();
+    } else if (outfit === 'gunluk' || outfit === 'top-tisort') {
       ctx.fillStyle = '#FFFFFF';
       ctx.beginPath();
       for (let i = 0; i < 10; i++) {
@@ -3012,13 +3179,45 @@ function makeMinifig(a: Avatar): any {
   const g = new THREE.Group();
   const { shirt, pants } = outfitColors(a);
   const skin = a.skin;
-  const legs = new THREE.Group();
-  const legL = box(legs, -0.5, 0, -0.27, 0.48, 1.05, 0.54, pants);
-  const legR = box(legs, 0.02, 0, -0.27, 0.48, 1.05, 0.54, pants);
-  box(legs, -0.5, 0, -0.32, 0.48, 0.18, 0.66, pants);
-  box(legs, 0.02, 0, -0.32, 0.48, 0.18, 0.66, pants);
-  g.add(legs);
+  const casual = a.outfit === 'gunluk';
+  const top = casual ? a.top || 'tisort' : '';
+  const bottom = casual ? a.bottom || 'pantolon' : 'pantolon';
+  const shoes = a.shoes || 'spor';
+  const shoeC = a.shoeColor || '#1D2B4F';
+  const tag = (o: any, part: string) => {
+    o.userData.part = part;
+    return o;
+  };
+  // bacaklar, şort/etek ve ayakkabılar
+  [-1, 1].forEach((side) => {
+    const x0 = side < 0 ? -0.5 : 0.02;
+    const part = side < 0 ? 'legL' : 'legR';
+    tag(box(g, x0, 0.16, -0.27, 0.48, 0.89, 0.54, bottom === 'pantolon' ? pants : skin), part);
+    if (bottom === 'sort') tag(box(g, x0 - 0.005, 0.62, -0.275, 0.49, 0.44, 0.55, pants), part);
+    if (shoes === 'bot') {
+      tag(box(g, x0 - 0.01, 0, -0.32, 0.5, 0.06, 0.66, '#2A1E14'), part);
+      tag(box(g, x0 - 0.008, 0.06, -0.29, 0.496, 0.36, 0.6, shoeC), part);
+    } else if (shoes === 'cizme') {
+      tag(box(g, x0 - 0.01, 0, -0.32, 0.5, 0.06, 0.66, '#2A1E14'), part);
+      tag(box(g, x0 - 0.01, 0.06, -0.29, 0.5, 0.6, 0.6, shoeC), part);
+    } else if (shoes === 'sandalet') {
+      tag(box(g, x0 - 0.01, 0, -0.32, 0.5, 0.05, 0.66, shoeC), part);
+      tag(box(g, x0, 0.05, -0.29, 0.48, 0.12, 0.6, skin), part);
+      tag(box(g, x0 - 0.008, 0.09, 0.12, 0.496, 0.05, 0.2, shoeC), part);
+    } else {
+      tag(box(g, x0 - 0.01, 0, -0.33, 0.5, 0.07, 0.68, '#F4F6FA'), part);
+      tag(box(g, x0 - 0.005, 0.07, -0.3, 0.49, 0.15, 0.63, shoeC), part);
+      tag(box(g, x0 + 0.1, 0.12, 0.33, 0.28, 0.04, 0.01, '#FFFFFF'), part);
+    }
+  });
   box(g, -0.52, 1.05, -0.29, 1.04, 0.24, 0.58, pants);
+  if (bottom === 'etek') {
+    const sk = mesh(new THREE.CylinderGeometry(0.56, 0.76, 0.56, 24), mat(pants));
+    sk.scale.set(1, 1, 0.66);
+    sk.position.set(0, 0.99, 0);
+    g.add(sk);
+  }
+  if (top === 'sweatshirt') box(g, -0.4, 2.2, -0.44, 0.8, 0.34, 0.18, shirt);
   // gövde (yukarı doğru daralan)
   const tg = new THREE.BoxGeometry(1.04, 1.15, 0.56);
   const pos = tg.attributes.position;
@@ -3027,35 +3226,82 @@ function makeMinifig(a: Avatar): any {
   const torso = mesh(tg, mat(shirt));
   torso.position.set(0, 1.29 + 0.575, 0);
   g.add(torso);
-  const decal = new THREE.Mesh(new THREE.PlaneGeometry(0.86, 0.95), new THREE.MeshStandardMaterial({ map: torsoDecal(a.outfit), transparent: true, roughness: 0.5 }));
+  const decal = new THREE.Mesh(new THREE.PlaneGeometry(0.86, 0.95), new THREE.MeshStandardMaterial({ map: torsoDecal(casual ? 'top-' + top : a.outfit), transparent: true, roughness: 0.5 }));
   decal.position.set(0, 1.86, 0.285);
   g.add(decal);
   // kollar
   const armGeo = new THREE.CylinderGeometry(0.15, 0.17, 0.95, 12);
+  const shortSleeve = top === 'tisort';
   [-1, 1].forEach((s) => {
-    const arm = mesh(armGeo, mat(shirt));
+    const part = s < 0 ? 'armL' : 'armR';
+    const arm = mesh(shortSleeve ? new THREE.CylinderGeometry(0.15, 0.165, 0.95, 12) : armGeo, mat(shirt));
     arm.position.set(s * 0.56, 1.95, 0.05);
     arm.rotation.z = s * 0.22;
     arm.rotation.x = -0.25;
-    g.add(arm);
+    if (shortSleeve) {
+      // kısa kollu: kolun alt yarısı ten rengi
+      arm.scale.set(1.04, 0.5, 1.04);
+      arm.position.set(s * 0.6, 2.18, -0.01);
+      const fore = mesh(new THREE.CylinderGeometry(0.14, 0.15, 0.5, 12), mat(skin));
+      fore.position.set(s * 0.65, 1.72, 0.12);
+      fore.rotation.z = s * 0.22;
+      fore.rotation.x = -0.25;
+      g.add(tag(fore, part));
+    }
+    g.add(tag(arm, part));
     const hand = mesh(geoCyl(), mat(skin));
     hand.scale.set(0.26, 0.22, 0.26);
     hand.position.set(s * 0.68, 1.42, 0.22);
-    g.add(hand);
+    g.add(tag(hand, part));
   });
   cyl(g, 0, 2.44, 0, 0.2, 0.12, skin);
   // kafa
   const head = mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.78, 28), mat(skin));
   head.position.set(0, 2.56 + 0.39, 0);
   g.add(head);
-  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.7), new THREE.MeshBasicMaterial({ map: faceTexture(), transparent: true }));
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.7), new THREE.MeshBasicMaterial({ map: faceTexture(a.face || 'gulen', a.gender === 'kiz'), transparent: true }));
   face.position.set(0, 2.94, 0.425);
   g.add(face);
   const hat = a.hat || 'yok';
-  if (hat === 'yok' || hat === 'kep') cyl(g, 0, 3.34, 0, 0.2, 0.16, skin);
+  if (hat === 'yok' || hat === 'kep' || hat === 'fiyonk' || hat === 'cicek') cyl(g, 0, 3.34, 0, 0.2, 0.16, skin);
   // saç
   const hairOn = hat !== 'astronot' && hat !== 'asci';
-  if (hairOn && a.hair === 'kisa') {
+  const capHair = () => {
+    const h = mesh(new THREE.SphereGeometry(0.47, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), mat(a.hairColor));
+    h.position.set(0, 3.2, -0.02);
+    h.scale.set(1, 0.6, 1.02);
+    g.add(h);
+    box(g, -0.46, 2.72, -0.47, 0.92, 0.5, 0.3, a.hairColor);
+  };
+  if (hairOn && a.hair === 'atkuyrugu') {
+    capHair();
+    const tail = mesh(new THREE.SphereGeometry(0.26, 16, 12), mat(a.hairColor));
+    tail.scale.set(0.8, 1.9, 0.8);
+    tail.position.set(0, 2.85, -0.68);
+    tail.rotation.x = 0.45;
+    g.add(tail);
+    const band = mesh(new THREE.TorusGeometry(0.12, 0.05, 8, 16), mat('#F06BA8'));
+    band.position.set(0, 3.2, -0.55);
+    band.rotation.x = 1.1;
+    g.add(band);
+  } else if (hairOn && a.hair === 'orgu') {
+    capHair();
+    [-1, 1].forEach((sd) => {
+      for (let i = 0; i < 3; i++) {
+        const b = mesh(new THREE.SphereGeometry(0.15 - i * 0.015, 12, 10), mat(a.hairColor));
+        b.position.set(sd * 0.5, 2.85 - i * 0.24, -0.12);
+        g.add(b);
+      }
+      const tie = mesh(new THREE.SphereGeometry(0.07, 10, 8), mat('#FFC23D'));
+      tie.position.set(sd * 0.5, 2.24, -0.12);
+      g.add(tie);
+    });
+  } else if (hairOn && a.hair === 'topuz') {
+    capHair();
+    const bun = mesh(new THREE.SphereGeometry(0.26, 16, 12), mat(a.hairColor));
+    bun.position.set(0, 3.48, -0.18);
+    g.add(bun);
+  } else if (hairOn && a.hair === 'kisa') {
     const h = mesh(new THREE.SphereGeometry(0.47, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), mat(a.hairColor));
     h.position.set(0, 3.2, -0.02);
     h.scale.set(1, 0.6, 1.02);
@@ -3085,6 +3331,28 @@ function makeMinifig(a: Avatar): any {
     c.scale.set(1, 0.62, 1);
     g.add(c);
     box(g, -0.32, 3.24, 0.2, 0.64, 0.07, 0.5, a.shirt);
+  } else if (hat === 'fiyonk') {
+    const bc = '#F06BA8';
+    [-1, 1].forEach((sd) => {
+      const w = mesh(new THREE.ConeGeometry(0.16, 0.3, 4), mat(bc));
+      w.rotation.z = sd * Math.PI / 2;
+      w.position.set(0.34 + sd * 0.17, 3.3, 0.08);
+      g.add(w);
+    });
+    const knot = mesh(new THREE.SphereGeometry(0.08, 10, 8), mat(bc));
+    knot.position.set(0.34, 3.3, 0.08);
+    g.add(knot);
+  } else if (hat === 'cicek') {
+    const ring = mesh(new THREE.TorusGeometry(0.44, 0.04, 8, 32), mat('#3FA34D'));
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(0, 3.27, 0);
+    g.add(ring);
+    ['#F06BA8', '#FFC23D', '#FFFFFF', '#8A6CFF', '#FF6F61', '#4AA8FF', '#F06BA8'].forEach((c, i) => {
+      const ang = (i / 7) * Math.PI * 2;
+      const f = mesh(new THREE.SphereGeometry(0.1, 10, 8), mat(c));
+      f.position.set(Math.cos(ang) * 0.44, 3.3, Math.sin(ang) * 0.44);
+      g.add(f);
+    });
   } else if (hat === 'baret') {
     const c = mesh(new THREE.SphereGeometry(0.5, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), mat('#FFC23D'));
     c.position.set(0, 3.22, 0);
@@ -3155,8 +3423,71 @@ function makeMinifig(a: Avatar): any {
       g.add(f);
     });
   }
-  g.userData.legs = [legL, legR];
+  return rigFig(g);
+}
+
+/** Karakteri eklemlerinden dönebilen parçalara ayırır (yürüme, el sallama, sevinme için). */
+function rigFig(g: any): any {
+  const body = new THREE.Group();
+  const pivots: Record<string, any> = {};
+  const joints: Record<string, [number, number, number]> = {
+    legL: [-0.26, 1.05, 0],
+    legR: [0.26, 1.05, 0],
+    armL: [-0.5, 2.3, 0.02],
+    armR: [0.5, 2.3, 0.02],
+    head: [0, 2.5, 0],
+  };
+  Object.keys(joints).forEach((k) => {
+    const p = new THREE.Group();
+    p.position.set(...joints[k]);
+    pivots[k] = p;
+    body.add(p);
+  });
+  const kids = g.children.slice();
+  g.add(body);
+  g.updateMatrixWorld(true);
+  kids.forEach((o: any) => {
+    const part = o.userData.part;
+    if (part && pivots[part]) pivots[part].attach(o);
+    else if (o.position.y > 2.52) pivots.head.attach(o);
+    else body.attach(o);
+  });
+  g.userData.parts = { body, ...pivots };
   return g;
+}
+
+type FigAnim = 'idle' | 'walk' | 'wave' | 'cheer';
+/** Hafif animasyon: yalnızca birkaç dönüş değeri değişir (iPad'de ek yük yok). */
+function animateFig(fig: any, mode: FigAnim, t: number) {
+  const p = fig && fig.userData && fig.userData.parts;
+  if (!p) return;
+  let lL = 0, lR = 0, aLx = 0, aRx = 0, aLz = 0, aRz = 0, hy = 0, hz = 0, by = 0;
+  const s = Math.sin(t * 7);
+  if (mode === 'walk') {
+    lL = s * 0.55;
+    lR = -s * 0.55;
+    aLx = -s * 0.5;
+    aRx = s * 0.5;
+    by = Math.abs(Math.cos(t * 7)) * 0.06;
+  } else if (mode === 'wave') {
+    aRz = 2.5 + Math.sin(t * 9) * 0.35;
+    hz = Math.sin(t * 3) * 0.08;
+  } else if (mode === 'cheer') {
+    aLz = -2.7 + Math.sin(t * 10) * 0.2;
+    aRz = 2.7 - Math.sin(t * 10) * 0.2;
+    by = Math.abs(Math.sin(t * 6)) * 0.35;
+    hy = Math.sin(t * 6) * 0.12;
+  } else {
+    hy = Math.sin(t * 0.9) * 0.18;
+    aLz = -Math.sin(t * 1.6) * 0.05;
+    aRz = Math.sin(t * 1.6) * 0.05;
+  }
+  p.legL.rotation.x = lL;
+  p.legR.rotation.x = lR;
+  p.armL.rotation.set(aLx, 0, aLz);
+  p.armR.rotation.set(aRx, 0, aRz);
+  p.head.rotation.set(0, hy, hz);
+  p.body.position.y = by;
 }
 
 /* ---------- Blok araç (3D) ---------- */
@@ -3855,6 +4186,7 @@ function createWorld(opts: {
   onLost?: () => void;
   objects: Record<string, { fresh: boolean }>;
   onObjectsSeen?: () => void;
+  greet?: FigAnim;
 }): WorldHandle {
   const { container, labelLayer } = opts;
   const W = () => container.clientWidth || 360;
@@ -4201,6 +4533,8 @@ function createWorld(opts: {
     walk = { from, to, start: performance.now(), dur: 900, done };
   };
 
+  const greetMode: FigAnim = opts.greet || 'idle';
+  const greetUntil = opts.interactive && opts.greet ? performance.now() + (opts.greet === 'cheer' ? 2600 : 2200) : 0;
   if (freshPos.length) {
     const fp = freshPos[0];
     camTween = { from: target.clone(), to: new THREE.Vector3(Math.max(-15, Math.min(15, fp.x)), 0, Math.max(-15, Math.min(15, fp.z))), start: performance.now() + 300, dur: 900 };
@@ -4243,6 +4577,7 @@ function createWorld(opts: {
       const k = Math.min(1, (now - walk.start) / walk.dur);
       player.position.lerpVectors(walk.from, walk.to, k);
       player.position.y = 0.3 + Math.sin(k * Math.PI) * 2.2;
+      animateFig(player, 'walk', t);
       if (k >= 1) {
         const d = walk.done;
         walk = null;
@@ -4250,7 +4585,8 @@ function createWorld(opts: {
         d();
       }
     } else if (a) {
-      player.position.y = 0.3 + Math.abs(Math.sin(t * 2.2)) * 0.12;
+      player.position.y = 0.3;
+      animateFig(player, now < greetUntil ? greetMode : 'idle', t);
     }
     if (a) {
       marker.rotation.y = t * 1.2;
@@ -4340,6 +4676,8 @@ function createWorld(opts: {
   };
 }
 
+const MapGreet = { lastStars: -1 };
+
 function CityWorld({
   state,
   interactive,
@@ -4382,6 +4720,13 @@ function CityWorld({
         onPick: (id) => pickRef.current(id),
         objects: Object.fromEntries(Object.entries(objRef.current || {}).map(([k, v]) => [k, { fresh: !v.seen }])),
         onObjectsSeen: () => seenRef.current && seenRef.current(),
+        greet: (() => {
+          // Oturumun ilk açılışında el sallar; yeni yıldız kazanılmışsa sevinir
+          const st = state.totalStars;
+          const g: FigAnim = MapGreet.lastStars < 0 ? 'wave' : st > MapGreet.lastStars ? 'cheer' : 'idle';
+          if (interactive) MapGreet.lastStars = st;
+          return g;
+        })(),
         onLost: () => {
           // iPad uygulamayı arka plana alınca 3D bağlamı kaybolabilir: geri gelince sahneyi yeniden kur
           const again = () => {
@@ -4662,9 +5007,15 @@ function GameStart({
 }
 
 /* ---------- Garaj ve karakter ---------- */
-function Showroom({ a }: { a: Avatar }) {
+function Showroom({ a, anim = 'idle', burst = 0 }: { a: Avatar; anim?: FigAnim; burst?: number }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const key = JSON.stringify(a);
+  const animRef = useRef<FigAnim>(anim);
+  animRef.current = anim;
+  const cheerUntil = useRef(0);
+  useEffect(() => {
+    if (burst) cheerUntil.current = performance.now() + 1300;
+  }, [burst]);
   const aRef = useRef(a);
   aRef.current = a;
   const world = useRef<null | { turn: any; models: any[]; place: (av: Avatar) => void }>(null);
@@ -4734,6 +5085,8 @@ function Showroom({ a }: { a: Avatar }) {
       const loop = (t: number) => {
         raf = requestAnimationFrame(loop);
         turn.rotation.y = Math.sin(t / 2400) * 0.6;
+        const wr = world.current;
+        if (wr && wr.models[0]) animateFig(wr.models[0], t < cheerUntil.current ? 'cheer' : animRef.current, t / 1000);
         renderer.render(scene, cam);
       };
       raf = requestAnimationFrame(loop);
@@ -4778,15 +5131,21 @@ function GarageScreen({
 }) {
   const a = state.city.avatar;
   const done = state.city.missionsCompleted;
-  const [tab, setTab] = useState<'araba' | 'kiyafet' | 'sapka' | 'aksesuar' | 'sac' | 'renk'>('araba');
+  type GTab = 'karakter' | 'sac' | 'sapka' | 'ust' | 'alt' | 'ayakkabi' | 'kostum' | 'aksesuar' | 'renk' | 'araba';
+  const [tab, setTab] = useState<GTab>('karakter');
+  const [anim, setAnim] = useState<FigAnim>('idle');
+  const [burst, setBurst] = useState(0);
   const set = (p: Partial<Avatar>) => {
     Sfx.tick();
+    setBurst((b) => b + 1);
     update((s) => ({ ...s, city: { ...s.city, avatar: { ...s.city.avatar, ...p } } }));
   };
+  /** Üst/alt giyim seçilince kostüm kaldırılır ki seçim karakterde hemen görünsün. */
+  const wear = (p: Partial<Avatar>) => set({ ...p, outfit: 'gunluk' });
   const card = (key: string, name: string, need: number, img: any, selected: boolean, onPick: () => void) => {
     const locked = need > done;
     return (
-      <button key={key} className={'g-card' + (selected ? ' on' : '') + (locked ? ' locked' : '')} onClick={locked ? undefined : onPick} aria-disabled={locked}>
+      <button key={key} className={'g-card' + (selected ? ' on' : '') + (locked ? ' locked' : '')} onClick={locked ? undefined : onPick} aria-disabled={locked} aria-pressed={selected}>
         <span className="g-img">{img}</span>
         <span className="g-name">{name}</span>
         {locked && (
@@ -4797,24 +5156,43 @@ function GarageScreen({
       </button>
     );
   };
-  const swatch = (list: string[], key: 'skin' | 'shirt' | 'pants' | 'hairColor', label: string) => (
-    <div className="g-swatch-group">
+  const fig = (p: Partial<Avatar>) => {
+    const av = { ...a, ...p };
+    return <LazyThumb k={'fig:' + JSON.stringify(av)} make={() => Thumbs.fig(av)} />;
+  };
+  const por = (p: Partial<Avatar>) => {
+    const av = { ...a, ...p };
+    return <LazyThumb k={'por:' + JSON.stringify(av)} make={() => Thumbs.portrait(av)} />;
+  };
+  const swatch = (list: string[], key: 'skin' | 'shirt' | 'pants' | 'hairColor' | 'shoeColor', label: string, casualOnly = false) => (
+    <div className="g-swatch-group" key={key}>
       <h3>{label}</h3>
       <div className="swatches">
         {list.map((c) => (
-          <button key={c} className={'swatch' + (a[key] === c ? ' on' : '')} style={{ background: c }} onClick={() => set({ [key]: c } as any)} aria-label={label + ' ' + c} />
+          <button
+            key={c}
+            className={'swatch' + ((a as any)[key] === c ? ' on' : '')}
+            style={{ background: c }}
+            onClick={() => (casualOnly ? wear({ [key]: c } as any) : set({ [key]: c } as any))}
+            aria-label={label + ' ' + c}
+          />
         ))}
       </div>
     </div>
   );
-  const TABS: Array<[typeof tab, string]> = [
-    ['araba', 'Arabalar'],
-    ['kiyafet', 'Kıyafet'],
-    ['sapka', 'Şapka'],
-    ['aksesuar', 'Aksesuar'],
+  const TABS: Array<[GTab, string]> = [
+    ['karakter', 'Karakter'],
     ['sac', 'Saç'],
+    ['sapka', 'Şapka'],
+    ['ust', 'Üst'],
+    ['alt', 'Alt'],
+    ['ayakkabi', 'Ayakkabı'],
+    ['kostum', 'Kostüm'],
+    ['aksesuar', 'Aksesuar'],
     ['renk', 'Renkler'],
+    ['araba', 'Arabalar'],
   ];
+  const gender = a.gender || 'erkek';
   return (
     <main className="screen game-screen garage-screen">
       <header className="topbar">
@@ -4822,41 +5200,99 @@ function GarageScreen({
         <span className="game-title">Garajım</span>
         <HudStars stars={state.totalStars} />
       </header>
-      <Showroom a={a} />
+      <div className="showroom-wrap">
+        <Showroom a={a} anim={anim} burst={burst} />
+        <div className="anim-bar" role="group" aria-label="Karakter hareketi">
+          {([['idle', 'Dur'], ['walk', 'Yürü'], ['wave', 'El salla'], ['cheer', 'Sevin']] as Array<[FigAnim, string]>).map(([k, l]) => (
+            <button key={k} className={anim === k ? 'on' : ''} onClick={() => setAnim(k)}>{l}</button>
+          ))}
+        </div>
+      </div>
       <nav className="g-tabs" role="tablist">
         {TABS.map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>
         ))}
       </nav>
-      <div className="g-grid">
-        {tab === 'araba' &&
-          activeCars(state).map((c) => {
-            const col = vehicleColor(c.id, a.carColor);
-            return card(c.id, c.name + ((c as any).special ? ' ★' : ''), c.need, <LazyThumb k={'car:' + c.id + ':' + (col || '')} make={() => Thumbs.car(c.id, col)} />, a.car === c.id, () => set({ car: c.id }));
-          })}
-        {tab === 'kiyafet' && OUTFITS.map((o) => card(o.id, o.name, o.need, <LazyThumb k={'fig:' + JSON.stringify({ ...a, outfit: o.id })} make={() => Thumbs.fig({ ...a, outfit: o.id })} />, a.outfit === o.id, () => set({ outfit: o.id })))}
-        {tab === 'sapka' && HATS.map((o) => card(o.id, o.name, o.need, <LazyThumb k={'por:' + JSON.stringify({ ...a, hat: o.id })} make={() => Thumbs.portrait({ ...a, hat: o.id })} />, (a.hat || 'yok') === o.id, () => set({ hat: o.id })))}
-        {tab === 'aksesuar' && ACCESSORIES.map((o) => card(o.id, o.name, o.need, <LazyThumb k={'fig:' + JSON.stringify({ ...a, accessory: o.id })} make={() => Thumbs.fig({ ...a, accessory: o.id })} />, (a.accessory || 'yok') === o.id, () => set({ accessory: o.id })))}
-        {tab === 'sac' && HAIR_STYLES.map((o) => card(o.id, o.name, 0, <LazyThumb k={'por:' + JSON.stringify({ ...a, hair: o.id, hat: 'yok' })} make={() => Thumbs.portrait({ ...a, hair: o.id, hat: 'yok' })} />, a.hair === o.id, () => set({ hair: o.id })))}
-      </div>
-      {tab === 'sac' && swatch(HAIR_COLORS, 'hairColor', 'Saç rengi')}
-      {tab === 'araba' && (
-        <div className="g-swatch-group">
-          <h3>Araba rengi</h3>
-          <div className="swatches">
-            <button className={'swatch auto' + (!a.carColor ? ' on' : '')} onClick={() => set({ carColor: undefined })} aria-label="Kendi rengi">A</button>
-            {CAR_PAINTS.map((p) => (
-              <button key={p.c} className={'swatch' + (a.carColor === p.c ? ' on' : '')} style={{ background: p.c }} onClick={() => set({ carColor: p.c })} aria-label={p.name} />
-            ))}
+      {tab === 'karakter' && (
+        <>
+          <h3 className="g-sub">Başlangıç karakteri</h3>
+          <div className="g-grid g-big">
+            {(['erkek', 'kiz'] as const).map((gd) =>
+              card(
+                gd,
+                gd === 'erkek' ? 'Erkek karakter' : 'Kız karakter',
+                0,
+                fig({ ...GENDER_PRESETS[gd], gender: gd }),
+                gender === gd,
+                () => set({ ...GENDER_PRESETS[gd], gender: gd })
+              )
+            )}
           </div>
-        </div>
+          <p className="g-note">Başlangıç karakteri yalnızca bir başlangıç görünümüdür; bütün saç, şapka ve kıyafetler iki karakter için de açıktır.</p>
+          <h3 className="g-sub">Yüz ifadesi</h3>
+          <div className="g-grid">{FACES.map((f) => card(f.id, f.name, 0, por({ face: f.id, hat: 'yok' }), (a.face || 'gulen') === f.id, () => set({ face: f.id })))}</div>
+          {swatch(SKINS, 'skin', 'Ten rengi')}
+        </>
       )}
+      {tab === 'sac' && (
+        <>
+          <div className="g-grid">{HAIR_STYLES.map((o) => card(o.id, o.name, 0, por({ hair: o.id, hat: 'yok' }), a.hair === o.id, () => set({ hair: o.id })))}</div>
+          {swatch(HAIR_COLORS, 'hairColor', 'Saç rengi')}
+        </>
+      )}
+      {tab === 'sapka' && <div className="g-grid">{HATS.map((o) => card(o.id, o.name, o.need, por({ hat: o.id }), (a.hat || 'yok') === o.id, () => set({ hat: o.id })))}</div>}
+      {tab === 'ust' && (
+        <>
+          <div className="g-grid">{TOPS.map((o) => card(o.id, o.name, 0, fig({ top: o.id, outfit: 'gunluk' }), a.outfit === 'gunluk' && (a.top || 'tisort') === o.id, () => wear({ top: o.id })))}</div>
+          {swatch(BLOCK_COLORS, 'shirt', 'Üst giyim rengi', true)}
+        </>
+      )}
+      {tab === 'alt' && (
+        <>
+          <div className="g-grid">{BOTTOMS.map((o) => card(o.id, o.name, 0, fig({ bottom: o.id, outfit: 'gunluk' }), a.outfit === 'gunluk' && (a.bottom || 'pantolon') === o.id, () => wear({ bottom: o.id })))}</div>
+          {swatch(BLOCK_COLORS, 'pants', 'Alt giyim rengi', true)}
+        </>
+      )}
+      {tab === 'ayakkabi' && (
+        <>
+          <div className="g-grid">{SHOES.map((o) => card(o.id, o.name, 0, fig({ shoes: o.id }), (a.shoes || 'spor') === o.id, () => set({ shoes: o.id })))}</div>
+          {swatch(SHOE_COLORS, 'shoeColor', 'Ayakkabı rengi')}
+        </>
+      )}
+      {tab === 'kostum' && (
+        <>
+          <div className="g-grid">{OUTFITS.map((o) => card(o.id, o.name, o.need, fig({ outfit: o.id }), a.outfit === o.id, () => set({ outfit: o.id })))}</div>
+          <p className="g-note">Kostüm giyilince üst ve alt giyim seçimleri saklanır; "Kostüm yok" seçince geri gelir.</p>
+        </>
+      )}
+      {tab === 'aksesuar' && <div className="g-grid">{ACCESSORIES.map((o) => card(o.id, o.name, o.need, fig({ accessory: o.id }), (a.accessory || 'yok') === o.id, () => set({ accessory: o.id })))}</div>}
       {tab === 'renk' && (
         <div className="g-colors">
           {swatch(SKINS, 'skin', 'Ten rengi')}
-          {swatch(BLOCK_COLORS, 'shirt', 'Tişört ve kep rengi')}
-          {swatch(BLOCK_COLORS, 'pants', 'Pantolon rengi')}
+          {swatch(HAIR_COLORS, 'hairColor', 'Saç rengi')}
+          {swatch(BLOCK_COLORS, 'shirt', 'Üst giyim ve kep rengi', true)}
+          {swatch(BLOCK_COLORS, 'pants', 'Alt giyim rengi', true)}
+          {swatch(SHOE_COLORS, 'shoeColor', 'Ayakkabı rengi')}
         </div>
+      )}
+      {tab === 'araba' && (
+        <>
+          <div className="g-grid">
+            {activeCars(state).map((c) => {
+              const col = vehicleColor(c.id, a.carColor);
+              return card(c.id, c.name + ((c as any).special ? ' ★' : ''), c.need, <LazyThumb k={'car:' + c.id + ':' + (col || '')} make={() => Thumbs.car(c.id, col)} />, a.car === c.id, () => set({ car: c.id }));
+            })}
+          </div>
+          <div className="g-swatch-group">
+            <h3>Araba rengi</h3>
+            <div className="swatches">
+              <button className={'swatch auto' + (!a.carColor ? ' on' : '')} onClick={() => set({ carColor: undefined })} aria-label="Kendi rengi">A</button>
+              {CAR_PAINTS.map((p) => (
+                <button key={p.c} className={'swatch' + (a.carColor === p.c ? ' on' : '')} style={{ background: p.c }} onClick={() => set({ carColor: p.c })} aria-label={p.name} />
+              ))}
+            </div>
+          </div>
+        </>
       )}
     </main>
   );
@@ -4938,7 +5374,7 @@ function BuildGame({
     const extra = sylls.length <= 3 ? shuffle(syllPool.filter((x) => !sylls.includes(x))).slice(0, 1) : [];
     let texts = shuffle([...sylls, ...extra]);
     for (let i = 0; i < 5 && texts.slice(0, sylls.length).join('') === sylls.join(''); i++) texts = shuffle(texts);
-    const mode: DisplayCase = resolveCase(s.letterCase) === 'both' ? 'upper' : s.letterCase;
+    const mode: DisplayCase = resolveCase(s.letterCase) === 'both' ? 'upper' : resolveCase(s.letterCase);
     setRound({ item, sylls, bricks: texts.map((t, i) => ({ id: i, text: t, color: BRICK_COLORS[i % BRICK_COLORS.length] })), mode });
     setPlaced([]);
     setRetries(0);
@@ -5854,7 +6290,7 @@ function itemSylls(it: { text: string; syllables?: string[] }): string[] {
   return autoSylls(it.text);
 }
 
-function parseSyllableInput(input: string, word: string): { ok: true; sylls: string[] } | { ok: false; error: string } {
+function parseSyllableInput(input: string, word: string): { ok: true; sylls: string[]; error?: string } | { ok: false; error: string; sylls?: string[] } {
   const flat = trUpper(input)
     .split(/\s+/)
     .filter(Boolean)
@@ -7668,9 +8104,9 @@ const AudioManager = {
     if (AudioManager.current && AudioManager.current.prio > prio) return 'dropped';
     const ctx = AudioManager.ensure();
     if (!ctx || !AudioManager.gain) return 'unavailable';
-    if (ctx.state !== 'running') {
+    if ((ctx.state as string) !== 'running') {
       try { await ctx.resume(); } catch (e) { /* yoksay */ }
-      if (ctx.state !== 'running') return 'unavailable';
+      if ((ctx.state as string) !== 'running') return 'unavailable';
     }
     if (!keep) Speech.halt();
     const my = Speech.seq;
