@@ -1,7 +1,7 @@
 /**
  * Selim City – Okuma Macerası
  * Tüm oyun mantığı, ekranlar ve 3D şehir bu dosyadadır.
- * Bölümler: Türler · Yardımcılar · Saklama · Ses (cihaz + Azure bulut + hazır MP3) · Oyunlar · 3D Dünya · Karaoke · Ebeveyn Paneli · Uygulama
+ * Bölümler: Türler · Yardımcılar · Saklama ve veri güvenliği · Ses · Oyunlar · 3D Dünya · Karaoke · Kelime Kutuları · Ebeveyn Paneli · Uygulama
  */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
@@ -12,11 +12,11 @@ import * as THREE from 'three';
    TÜRLER
    ============================================================ */
 type ContentType = 'harf' | 'hece' | 'kelime' | 'cumle';
-type Source = 'okul' | 'oneri';
+type Source = 'okul' | 'oneri' | 'ornek';
 type CheckMode = 'hybrid' | 'parent' | 'auto';
 type Verifier = 'mic' | 'parent' | 'tap';
 type Status = 'yeni' | 'gelisiyor' | 'pekistiriliyor' | 'tekrar';
-type LetterCase = 'upper' | 'lower' | 'both' | 'mixed';
+type LetterCase = DisplayCase | 'title' | 'titleBoth' | 'mixed';
 type Screen = 'start' | 'home' | 'game-hece' | 'game-kelime' | 'parent' | 'rest' | 'badges' | 'city' | 'avatar' | 'gift' | 'garage' | 'game-duy' | 'game-birlestir' | 'game-karaoke';
 
 interface Item {
@@ -53,6 +53,8 @@ interface Settings {
   profilePhotoV: number;
   cloudTts: CloudTtsSettings;
   voiceFx: VoiceFxSettings;
+  boxDifficulty: 'auto' | '2' | '3' | '4';
+  vehicleRewards: Record<string, boolean>;
 }
 
 interface DayStat {
@@ -84,6 +86,8 @@ interface AppState {
   cityObjects: Record<string, { earnedAt: string; seen: boolean; word: string }>;
   karaokeLog: Record<string, string>;
   welcomed: boolean;
+  legacy: { items: any[]; fields: Record<string, any> };
+  boxGame: { level: Record<string, number>; streak: Record<string, number> };
 }
 
 interface Recordings {
@@ -203,20 +207,21 @@ function caseForms(t: string): { upper: string; lower: string } {
 }
 
 const CASE_LABEL: Record<LetterCase, string> = {
-  both: 'İkisi birlikte',
-  upper: 'Büyük harf',
-  lower: 'Küçük harf',
+  both: 'ANNE + anne',
+  upper: 'ANNE',
+  lower: 'anne',
+  title: 'Anne',
+  titleBoth: 'Anne + anne',
   mixed: 'Karışık (her turda biri)',
 };
 
-function CaseText({ text, mode, className }: { text: string; mode: 'upper' | 'lower' | 'both'; className?: string }) {
-  const f = caseForms(text);
-  if (mode === 'upper') return <span className={className}>{f.upper}</span>;
-  if (mode === 'lower') return <span className={className}>{f.lower}</span>;
+function CaseText({ text, mode, className }: { text: string; mode: DisplayCase; className?: string }) {
+  const convs = caseConvs(mode);
+  if (convs.length === 1) return <span className={className}>{applyConv(text, convs[0])}</span>;
   return (
     <span className={'case-both ' + (className || '')}>
-      <span>{f.upper}</span>
-      <span className="case-lower">{f.lower}</span>
+      <span>{applyConv(text, convs[0])}</span>
+      <span className="case-lower">{applyConv(text, convs[1])}</span>
     </span>
   );
 }
@@ -354,12 +359,14 @@ function defaultSettings(): Settings {
     profilePhotoV: 0,
     cloudTts: defaultCloudTts(),
     voiceFx: defaultVoiceFx(),
+    boxDifficulty: 'auto',
+    vehicleRewards: {},
   };
 }
 
 function defaultState(): AppState {
   return {
-    version: 3,
+    version: SCHEMA_VERSION,
     updatedAt: 0,
     pinHash: null,
     pinSalt: uid(),
@@ -377,19 +384,29 @@ function defaultState(): AppState {
     cityObjects: {},
     karaokeLog: {},
     welcomed: false,
+    legacy: { items: [], fields: {} },
+    boxGame: { level: {}, streak: {} },
   };
 }
 
 function migrate(raw: any): AppState | null {
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.items)) return null;
   const base = defaultState();
+  const okItem = (x: any) => x && typeof x.text === 'string' && x.text.trim() && ['harf', 'hece', 'kelime', 'cumle'].includes(x.type);
+  const prevLegacy = raw.legacy && typeof raw.legacy === 'object' ? raw.legacy : { items: [], fields: {} };
+  const legacyItems = (Array.isArray(prevLegacy.items) ? prevLegacy.items : []).concat(raw.items.filter((x: any) => !okItem(x)));
+  const KNOWN = ['version', 'updatedAt', 'pinHash', 'pinSalt', 'settings', 'items', 'totalStars', 'chests', 'badges', 'days', 'city', 'gift', 'giftHistory', 'recordings', 'wordImages', 'cityObjects', 'karaokeLog', 'welcomed', 'legacy', 'boxGame'];
+  const legacyFields: Record<string, any> = { ...(prevLegacy.fields || {}) };
+  Object.keys(raw).forEach((k) => {
+    if (!KNOWN.includes(k)) legacyFields[k] = raw[k];
+  });
   const items: Item[] = raw.items
-    .filter((x: any) => x && typeof x.text === 'string' && ['harf', 'hece', 'kelime', 'cumle'].includes(x.type))
+    .filter(okItem)
     .map((x: any) => ({
       id: String(x.id || uid()),
       type: x.type,
       text: String(x.text),
-      source: x.source === 'oneri' ? 'oneri' : 'okul',
+      source: x.source === 'oneri' ? 'oneri' : x.source === 'ornek' ? 'ornek' : 'okul',
       learnedAt: String(x.learnedAt || todayKey()),
       approved: x.approved !== false,
       active: x.active !== false,
@@ -403,13 +420,12 @@ function migrate(raw: any): AppState | null {
     }));
   return {
     ...base,
-    version: 3,
+    version: SCHEMA_VERSION,
     updatedAt: Number(raw.updatedAt) || 0,
     pinHash: typeof raw.pinHash === 'string' ? raw.pinHash : null,
     pinSalt: typeof raw.pinSalt === 'string' ? raw.pinSalt : base.pinSalt,
     settings: (() => {
       const st: any = { ...base.settings, ...(raw.settings || {}) };
-      if (!['upper', 'lower', 'both', 'mixed'].includes(st.letterCase)) st.letterCase = 'both';
       delete st.upperCase;
       if (![3, 5, 7, 10].includes(st.starsPerMission)) st.starsPerMission = 5;
       if (!['neseli', 'cizgi', 'sicak', 'dogal'].includes(st.voicePreset)) st.voicePreset = 'neseli';
@@ -419,6 +435,9 @@ function migrate(raw: any): AppState | null {
       st.profilePhotoV = Number(st.profilePhotoV) || 0;
       st.cloudTts = migrateCloudTts(st.cloudTts);
       st.voiceFx = migrateVoiceFx(st.voiceFx);
+      if (!['auto', '2', '3', '4'].includes(st.boxDifficulty)) st.boxDifficulty = 'auto';
+      if (!st.vehicleRewards || typeof st.vehicleRewards !== 'object') st.vehicleRewards = {};
+      if (!['upper', 'lower', 'both', 'title', 'titleBoth', 'mixed'].includes(st.letterCase)) st.letterCase = 'both';
       return st as Settings;
     })(),
     items,
@@ -469,14 +488,23 @@ function migrate(raw: any): AppState | null {
     cityObjects: raw.cityObjects && typeof raw.cityObjects === 'object' ? raw.cityObjects : {},
     karaokeLog: raw.karaokeLog && typeof raw.karaokeLog === 'object' ? raw.karaokeLog : {},
     welcomed: typeof raw.welcomed === 'boolean' ? raw.welcomed : (Number(raw.updatedAt) || 0) > 0,
+    legacy: { items: legacyItems, fields: legacyFields },
+    boxGame: {
+      level: raw.boxGame && raw.boxGame.level && typeof raw.boxGame.level === 'object' ? raw.boxGame.level : {},
+      streak: raw.boxGame && raw.boxGame.streak && typeof raw.boxGame.streak === 'object' ? raw.boxGame.streak : {},
+    },
   };
 }
 
 function loadLocal(): AppState | null {
   try {
     const s = localStorage.getItem(LS_KEY);
-    return s ? migrate(JSON.parse(s)) : null;
+    if (!s) return null;
+    const raw = JSON.parse(s);
+    BOOT.raw = raw;
+    return migrate(raw);
   } catch (e) {
+    BOOT.parseError = true;
     return null;
   }
 }
@@ -1299,14 +1327,12 @@ function WheelGame({
   pendingRef.current = pending;
   retriesRef.current = retries;
 
-  const pickRoundCase = (): 'upper' | 'lower' | 'both' =>
-    s.letterCase === 'mixed' ? (Math.random() < 0.5 ? 'upper' : 'lower') : s.letterCase;
-  const [roundCase, setRoundCase] = useState<'upper' | 'lower' | 'both'>(() => pickRoundCase());
-  const toLabel = (t: string, c: 'upper' | 'lower' | 'both'): WheelLabel => {
-    const f = caseForms(t);
-    if (c === 'upper') return { main: f.upper };
-    if (c === 'lower') return { main: f.lower };
-    return { main: f.upper, sub: f.lower };
+  const pickRoundCase = (): DisplayCase =>
+    resolveCase(s.letterCase);
+  const [roundCase, setRoundCase] = useState<DisplayCase>(() => pickRoundCase());
+  const toLabel = (t: string, c: DisplayCase): WheelLabel => {
+    const cv = caseConvs(c);
+    return { main: applyConv(t, cv[0]), sub: cv[1] ? applyConv(t, cv[1]) : undefined };
   };
   const spinMs = s.animations ? 3600 : 250;
   const micAvailable = s.checkMode !== 'parent' && !!SRClass && !micBlocked;
@@ -1593,13 +1619,22 @@ const DISTRICTS: District[] = [
   { id: 'dag', name: 'Dağ Köyü', need: 14, icon: '⛰️', ground: '#C9E4C5', mission: 'Köprü taşlarını yerleştir' },
 ];
 
-const CARS: Unlockable[] = [
+const CARS: Array<Unlockable & { special?: boolean; real?: boolean }> = [
   { id: 'mini', name: 'Kırmızı mini araba', need: 0 },
   { id: 'taksi', name: 'Sarı taksi', need: 1 },
+  { id: 'scooter', name: 'Scooter', need: 2 },
   { id: 'jip', name: 'Yeşil jip', need: 3 },
-  { id: 'dondurma', name: 'Dondurma kamyonu', need: 5 },
-  { id: 'itfaiye', name: 'İtfaiye aracı', need: 8 },
-  { id: 'uzayaraci', name: 'Uzay gezgini', need: 12 },
+  { id: 'prag', name: 'Prag Liftback (Škoda esintili)', need: 4, real: true },
+  { id: 'motosiklet', name: 'Motosiklet', need: 5 },
+  { id: 'dondurma', name: 'Dondurma kamyonu', need: 6 },
+  { id: 'paris', name: 'Paris Hatchback (Megane esintili)', need: 7, real: true },
+  { id: 'itfaiye', name: 'İtfaiye aracı', need: 8, special: true },
+  { id: 'ambulans', name: 'Ambulans', need: 9, special: true },
+  { id: 'bavyera', name: 'Bavyera Sedan (BMW esintili)', need: 10, real: true },
+  { id: 'sportif', name: 'Sportif Sedan (Audi esintili)', need: 11, real: true },
+  { id: 'uzayaraci', name: 'Uzay gezgini', need: 12, special: true },
+  { id: 'luks', name: 'Lüks Sedan (Mercedes esintili)', need: 13, real: true },
+  { id: 'ucak', name: 'Uçak', need: 15, special: true },
 ];
 
 const OUTFITS: Unlockable[] = [
@@ -1621,7 +1656,7 @@ const HAIRS: Array<{ id: string; name: string }> = [
 const HAIR_COLORS = ['#5B3A1E', '#1D2B4F', '#E3A33B', '#C2462E'];
 const BLOCK_COLORS = ['#4AA8FF', '#FF6F61', '#2DBE9B', '#FFC23D', '#8A6CFF', '#1D2B4F', '#FF9F45', '#F2F2F2'];
 
-interface Avatar { skin: string; hair: string; hairColor: string; shirt: string; pants: string; outfit: string; car: string; hat?: string; accessory?: string }
+interface Avatar { skin: string; hair: string; hairColor: string; shirt: string; pants: string; outfit: string; car: string; hat?: string; accessory?: string; carColor?: string }
 
 interface CityState { missionsCompleted: number; missionStars: number; avatar: Avatar }
 
@@ -1671,11 +1706,11 @@ function nextLocked(done: number) {
   return all[0] || null;
 }
 
-function unlocksAt(n: number): string[] {
+function unlocksAt(n: number, vr: Record<string, boolean> = {}): string[] {
   return [
     ...BUILDINGS.filter((b) => b.need === n && n > 0).map((b) => 'Yeni bina: ' + b.name),
     ...ZONES.filter((z) => z.need === n).map((z) => 'Yeni bölge: ' + z.name),
-    ...CARS.filter((c) => c.need === n && n > 0).map((c) => 'Yeni araba: ' + c.name),
+    ...CARS.filter((c) => c.need === n && n > 0 && vr[c.id] !== false).map((c) => 'Yeni araç: ' + c.name),
     ...OUTFITS.filter((o) => o.need === n && n > 0).map((o) => 'Yeni kıyafet: ' + o.name),
     ...HATS.filter((o) => o.need === n && n > 0).map((o) => 'Yeni şapka: ' + o.name),
     ...ACCESSORIES.filter((o) => o.need === n && n > 0).map((o) => 'Yeni aksesuar: ' + o.name),
@@ -3119,9 +3154,10 @@ const CAR_COLOR: Record<string, string> = {
   uzayaraci: '#C3CEDF',
 };
 
-function makeCar(id: string): any {
+function makeCar(id: string, color?: string): any {
+  if (VEHICLE_BUILDERS[id]) return VEHICLE_BUILDERS[id](color);
   const g = new THREE.Group();
-  const c = CAR_COLOR[id] || '#4AA8FF';
+  const c = color || CAR_COLOR[id] || '#4AA8FF';
   const studs = new StudBatch();
   const win = '#BFE7FF';
   const glass = { mat: { roughness: 0.1, metalness: 0.2 } };
@@ -3262,12 +3298,12 @@ const Thumbs = {
       return f;
     }, 'portrait');
   },
-  car(id: string) {
-    return Thumbs.render('car:' + id, () => {
-      const c = makeCar(id);
+  car(id: string, color?: string) {
+    return Thumbs.render('car:' + id + ':' + (color || ''), () => {
+      const c = makeCar(id, color);
       c.rotation.y = -0.5;
       return c;
-    }, 'car');
+    }, VEHICLE_BUILDERS[id] ? 'obj' : 'car');
   },
 };
 
@@ -3355,7 +3391,7 @@ const BUILDINGS: BuildingDef[] = [
   { id: 'okul', name: 'Okuma Okulu', sub: 'Hece Çarkı', need: 0, x: -6.5, z: -6.5, screen: 'game-hece' },
   { id: 'garaj', name: 'Kelime Garajı', sub: 'Kelime Çarkı', need: 0, x: 6.5, z: -6.5, screen: 'game-kelime' },
   { id: 'ses', name: 'Ses İstasyonu', sub: 'Duy ve Bul', need: 1, x: 6.5, z: 6.5, screen: 'game-duy' },
-  { id: 'atolye', name: 'Yapı Atölyesi', sub: 'Heceleri Birleştir', need: 2, x: -6.5, z: 6.5, screen: 'game-birlestir' },
+  { id: 'atolye', name: 'Yapı Atölyesi', sub: 'Kelime Kutuları', need: 2, x: -6.5, z: 6.5, screen: 'game-birlestir' },
   { id: 'sahne', name: 'Karaoke Sahnesi', sub: 'Hece hece oku', need: 0, x: 16.5, z: 0, screen: 'game-karaoke' },
   { id: 'hazine', name: 'Hazine Merkezi', sub: 'Gizemli Hediye', need: 0, x: 0, z: -16.5, screen: 'gift' },
   { id: 'ev', name: 'Evim ve Garajım', sub: 'Karakter ve arabalar', need: 0, x: -16.5, z: 0, screen: 'garage' },
@@ -3913,7 +3949,7 @@ function createWorld(opts: {
   studs.build(world);
 
   // NPC arabalar: çevre yolunda turlar
-  const npc = ['mini', 'jip', 'dondurma', 'itfaiye'];
+  const npc = ['mini', 'prag', 'dondurma', 'ambulans', 'paris'];
   npc.forEach((id, i) => {
     const c = makeCar(id);
     c.scale.setScalar(0.62);
@@ -3928,7 +3964,7 @@ function createWorld(opts: {
   player.position.set(home.x + 3.6, 0.3, home.z + 3.6);
   player.rotation.y = Math.PI / 4;
   world.add(player);
-  const myCar = makeCar(opts.avatar.car);
+  const myCar = makeCar(opts.avatar.car, opts.avatar.carColor);
   myCar.scale.setScalar(0.7);
   myCar.position.set(home.x + 2.1, 0.3, home.z + 4.2);
   myCar.rotation.y = Math.PI / 2;
@@ -4340,7 +4376,7 @@ const MISSION_TEXT: Record<string, string> = {
   garaj: "Kelime Garajı'nda kelimeleri oku",
   ses: "Ses İstasyonu'nda duyduğunu bul",
   sahne: "Karaoke Sahnesi'nde hece hece oku",
-  atolye: "Yapı Atölyesi'nde kelime inşa et",
+  atolye: "Yapı Atölyesi'nde kelimeleri kutulara yerleştir",
 };
 
 function LockIcon({ size = 18 }: { size?: number }) {
@@ -4538,7 +4574,21 @@ function MapScreen({
   );
 }
 
-function GameStart({ state, onStart, animations }: { state: AppState; onStart: () => void; animations: boolean }) {
+function GameStart({
+  state,
+  onStart,
+  animations,
+  recovery,
+  onRecover,
+  onDismissRecovery,
+}: {
+  state: AppState;
+  onStart: () => void;
+  animations: boolean;
+  recovery?: SnapInfo | null;
+  onRecover?: () => void;
+  onDismissRecovery?: () => void;
+}) {
   const firstName = trUpper(state.settings.childName.split(' ')[0] || 'Selim');
   return (
     <main className="start-game">
@@ -4550,6 +4600,19 @@ function GameStart({ state, onStart, animations }: { state: AppState; onStart: (
         </h1>
         <p className="logo-ribbon">Okuma Macerası</p>
         <button className="game-btn giant" onClick={onStart}>BAŞLA</button>
+        {recovery && (
+          <div className="recovery-card" role="alert">
+            <b>Ebeveyn: Kayıtlı içerik bulundu</b>
+            <span>Bu cihazda {fmtDate(recovery.at)} tarihli bir kopyada {recovery.items} içerik ({recovery.words} kelime) ve {recovery.stars} yıldız var, ama şu an liste boş görünüyor.</span>
+            <span className="row gap wrap">
+              <button className="btn primary" onClick={onRecover}>Geri yükle (PIN)</button>
+              <button className="btn ghost" onClick={onDismissRecovery}>Şimdi değil</button>
+            </span>
+          </div>
+        )}
+        {isDeploymentUrl() && (
+          <p className="addr-warn">Ebeveyn: Bu adres tek bir yayına aittir ve güncellenmez. Uygulamayı Vercel'deki ana adresten açın.</p>
+        )}
       </div>
     </main>
   );
@@ -4589,7 +4652,7 @@ function Showroom({ a }: { a: Avatar }) {
       fig.position.set(-1.7, 0.2, 0.6);
       fig.rotation.y = 0.4;
       turn.add(fig);
-      const car = makeCar(a.car);
+      const car = makeCar(a.car, a.carColor);
       car.position.set(1.4, 0.2, -0.4);
       car.rotation.y = -0.5;
       turn.add(car);
@@ -4687,13 +4750,28 @@ function GarageScreen({
         ))}
       </nav>
       <div className="g-grid">
-        {tab === 'araba' && CARS.map((c) => card(c.id, c.name, c.need, <LazyThumb k={'car:' + c.id} make={() => Thumbs.car(c.id)} />, a.car === c.id, () => set({ car: c.id })))}
+        {tab === 'araba' &&
+          activeCars(state).map((c) => {
+            const col = (c as any).real || VEHICLE_BUILDERS[c.id] ? a.carColor : undefined;
+            return card(c.id, c.name + ((c as any).special ? ' ★' : ''), c.need, <LazyThumb k={'car:' + c.id + ':' + (col || '')} make={() => Thumbs.car(c.id, col)} />, a.car === c.id, () => set({ car: c.id }));
+          })}
         {tab === 'kiyafet' && OUTFITS.map((o) => card(o.id, o.name, o.need, <LazyThumb k={'fig:' + JSON.stringify({ ...a, outfit: o.id })} make={() => Thumbs.fig({ ...a, outfit: o.id })} />, a.outfit === o.id, () => set({ outfit: o.id })))}
         {tab === 'sapka' && HATS.map((o) => card(o.id, o.name, o.need, <LazyThumb k={'por:' + JSON.stringify({ ...a, hat: o.id })} make={() => Thumbs.portrait({ ...a, hat: o.id })} />, (a.hat || 'yok') === o.id, () => set({ hat: o.id })))}
         {tab === 'aksesuar' && ACCESSORIES.map((o) => card(o.id, o.name, o.need, <LazyThumb k={'fig:' + JSON.stringify({ ...a, accessory: o.id })} make={() => Thumbs.fig({ ...a, accessory: o.id })} />, (a.accessory || 'yok') === o.id, () => set({ accessory: o.id })))}
         {tab === 'sac' && HAIR_STYLES.map((o) => card(o.id, o.name, 0, <LazyThumb k={'por:' + JSON.stringify({ ...a, hair: o.id, hat: 'yok' })} make={() => Thumbs.portrait({ ...a, hair: o.id, hat: 'yok' })} />, a.hair === o.id, () => set({ hair: o.id })))}
       </div>
       {tab === 'sac' && swatch(HAIR_COLORS, 'hairColor', 'Saç rengi')}
+      {tab === 'araba' && (
+        <div className="g-swatch-group">
+          <h3>Araba rengi</h3>
+          <div className="swatches">
+            <button className={'swatch auto' + (!a.carColor ? ' on' : '')} onClick={() => set({ carColor: undefined })} aria-label="Kendi rengi">A</button>
+            {CAR_PAINTS.map((p) => (
+              <button key={p.c} className={'swatch' + (a.carColor === p.c ? ' on' : '')} style={{ background: p.c }} onClick={() => set({ carColor: p.c })} aria-label={p.name} />
+            ))}
+          </div>
+        </div>
+      )}
       {tab === 'renk' && (
         <div className="g-colors">
           {swatch(SKINS, 'skin', 'Ten rengi')}
@@ -4766,7 +4844,7 @@ function BuildGame({
   );
   const syllPool = useMemo(() => state.items.filter((i) => i.type === 'hece' && i.approved && i.active).map((i) => trUpper(i.text)), [state.items]);
   const recent = useRef<string[]>([]);
-  const [round, setRound] = useState<null | { item: Item; sylls: string[]; bricks: Array<{ id: number; text: string; color: string }>; mode: 'upper' | 'lower' | 'both' }>(null);
+  const [round, setRound] = useState<null | { item: Item; sylls: string[]; bricks: Array<{ id: number; text: string; color: string }>; mode: DisplayCase }>(null);
   const [placed, setPlaced] = useState<number[]>([]);
   const [phase, setPhase] = useState<'play' | 'wrong' | 'success'>('play');
   const [retries, setRetries] = useState(0);
@@ -4781,7 +4859,7 @@ function BuildGame({
     const extra = sylls.length <= 3 ? shuffle(syllPool.filter((x) => !sylls.includes(x))).slice(0, 1) : [];
     let texts = shuffle([...sylls, ...extra]);
     for (let i = 0; i < 5 && texts.slice(0, sylls.length).join('') === sylls.join(''); i++) texts = shuffle(texts);
-    const mode: 'upper' | 'lower' | 'both' = s.letterCase === 'mixed' ? (Math.random() < 0.5 ? 'upper' : 'lower') : s.letterCase === 'both' ? 'upper' : s.letterCase;
+    const mode: DisplayCase = resolveCase(s.letterCase) === 'both' ? 'upper' : s.letterCase;
     setRound({ item, sylls, bricks: texts.map((t, i) => ({ id: i, text: t, color: BRICK_COLORS[i % BRICK_COLORS.length] })), mode });
     setPlaced([]);
     setRetries(0);
@@ -4919,7 +4997,7 @@ function ListenGame({
   const pick = useMessagePicker();
   const pool = useMemo(() => state.items.filter((i) => (i.type === 'hece' || i.type === 'kelime') && i.approved && i.active), [state.items]);
   const recent = useRef<string[]>([]);
-  const [round, setRound] = useState<null | { item: Item; options: Item[]; mode: 'upper' | 'lower' | 'both' }>(null);
+  const [round, setRound] = useState<null | { item: Item; options: Item[]; mode: DisplayCase }>(null);
   const [wrong, setWrong] = useState<string[]>([]);
   const [phase, setPhase] = useState<'play' | 'success'>('play');
   const [msg, setMsg] = useState('');
@@ -4940,7 +5018,7 @@ function ListenGame({
       .map((x) => x.o);
     const n = Math.min(ranked.length, pool.length >= 4 ? 3 : 2);
     const options = shuffle([item, ...ranked.slice(0, n)]);
-    const mode: 'upper' | 'lower' | 'both' = s.letterCase === 'mixed' ? (Math.random() < 0.5 ? 'upper' : 'lower') : s.letterCase;
+    const mode: DisplayCase = resolveCase(s.letterCase);
     setRound({ item, options, mode });
     setWrong([]);
     setPhase('play');
@@ -5132,21 +5210,21 @@ async function speakPraise(text: string): Promise<void> {
   await Speech.speak(text);
 }
 
-function SyllableText({ text, mode, hl, className }: { text: string; mode: 'upper' | 'lower' | 'both'; hl: number | null; className?: string }) {
+function SyllableText({ text, mode, hl, className }: { text: string; mode: DisplayCase; hl: number | null; className?: string }) {
   if (hl === null) return <CaseText text={text} mode={mode} className={className} />;
   const { groups } = unitsOf(text);
-  const line = (conv: (s: string) => string, key: string) => {
+  const line = (conv: CaseConv, key: string) => {
     let idx = -1;
     return (
       <span className="syl-line" key={key}>
         {groups.map((g, wi) => (
           <span className="syl-word" key={wi}>
-            {g.map((u) => {
+            {g.map((u, ui) => {
               idx++;
               const on = hl === -1 || hl === idx;
               return (
                 <span key={idx} className={'syl' + (on ? ' on' : '') + (hl === -1 ? ' all' : '')}>
-                  {conv(u)}
+                  {conv(u, ui === 0)}
                 </span>
               );
             })}
@@ -5157,8 +5235,7 @@ function SyllableText({ text, mode, hl, className }: { text: string; mode: 'uppe
   };
   return (
     <span className={'syl-text ' + (className || '')}>
-      {(mode === 'upper' || mode === 'both') && line(trUpper, 'u')}
-      {(mode === 'lower' || mode === 'both') && line(trLower, 'l')}
+      {caseConvs(mode).map((c, i) => line(c, 'l' + i))}
     </span>
   );
 }
@@ -6202,21 +6279,21 @@ function KaraokeWord({
   sylls: string[];
   status: KStatus[];
   whole: boolean;
-  caseMode: 'upper' | 'lower' | 'both';
+  caseMode: DisplayCase;
   onTap?: (i: number) => void;
 }) {
   const groups = groupSylls(text, sylls) || [sylls];
   const letters = sylls.join('').length;
-  const lines: Array<(s: string) => string> = caseMode === 'both' ? [trUpper, trLower] : [caseMode === 'lower' ? trLower : trUpper];
+  const lines: CaseConv[] = caseConvs(caseMode);
   return (
-    <div className={'kw' + (letters > 7 ? ' long' : '') + (caseMode === 'both' ? ' two' : '') + (whole ? ' whole' : '') + (onTap ? ' tappable' : '')}>
+    <div className={'kw' + (letters > 7 ? ' long' : '') + (isTwoLine(caseMode) ? ' two' : '') + (whole ? ' whole' : '') + (onTap ? ' tappable' : '')}>
       {lines.map((conv, li) => {
         let idx = -1;
         return (
           <div className="kw-line" key={li}>
             {groups.map((g, wi) => (
               <span className="kw-word" key={wi}>
-                {g.map((s) => {
+                {g.map((s, si) => {
                   idx++;
                   const i = idx;
                   const st = status[i] || 'idle';
@@ -6225,7 +6302,7 @@ function KaraokeWord({
                     : {};
                   return (
                     <span key={i} className={'kw-syl ' + st} {...props}>
-                      {conv(s)}
+                      {conv(s, si === 0)}
                     </span>
                   );
                 })}
@@ -6371,7 +6448,7 @@ function KaraokeGame({
   const [retries, setRetries] = useState(0);
   const [msg, setMsg] = useState('');
   const [heard, setHeard] = useState('');
-  const [caseMode, setCaseMode] = useState<'upper' | 'lower' | 'both'>('upper');
+  const [caseMode, setCaseMode] = useState<DisplayCase>('upper');
   const [onBreak, setOnBreak] = useState(false);
   const listener = useRef<{ stop: () => void } | null>(null);
   const prog = useRef(0);
@@ -6430,7 +6507,7 @@ function KaraokeGame({
     setRetries(0);
     setPending(null);
     setPhase('play');
-    setCaseMode(s.letterCase === 'mixed' ? (Math.random() < 0.5 ? 'upper' : 'lower') : s.letterCase);
+    setCaseMode(resolveCase(s.letterCase));
     reset(m, it);
     setMsg(modeMsg(m));
     if (auto && m === 'dinle') {
@@ -7648,6 +7725,1035 @@ function VoiceFxCard({ state, update }: { state: AppState; update: (fn: (s: AppS
 }
 
 /* ============================================================
+   VERİ GÜVENLİĞİ: OTOMATİK YEDEKLER, BÜTÜNLÜK KONTROLÜ, KURTARMA
+   ============================================================ */
+const APP_BUILD = '2026-10-14.2';
+const SCHEMA_VERSION = 4;
+const MAX_SNAPSHOTS = 8;
+
+interface SnapInfo {
+  key: string;
+  at: number;
+  reason: string;
+  items: number;
+  words: number;
+  stars: number;
+}
+interface DataMeta {
+  lastBuild?: string;
+  lastMigrationAt?: number;
+  lastMigrationFrom?: number;
+  lastAutoBackupAt?: number;
+  lastManualBackupAt?: number;
+}
+
+async function idbKeys(prefix: string): Promise<string[]> {
+  try {
+    const db = await IDB.open();
+    return await new Promise<string[]>((resolve) => {
+      const out: string[] = [];
+      const req = db.transaction('kv', 'readonly').objectStore('kv').openCursor();
+      req.onsuccess = () => {
+        const cur = req.result;
+        if (!cur) return resolve(out);
+        const k = String(cur.key);
+        if (k.startsWith(prefix)) out.push(k);
+        cur.continue();
+      };
+      req.onerror = () => resolve(out);
+    });
+  } catch (e) {
+    return [];
+  }
+}
+
+function summarize(raw: any): { items: number; words: number; stars: number } {
+  const items = raw && Array.isArray(raw.items) ? raw.items : [];
+  return { items: items.length, words: items.filter((i: any) => i && i.type === 'kelime').length, stars: Number(raw && raw.totalStars) || 0 };
+}
+
+const Snap = {
+  async list(): Promise<SnapInfo[]> {
+    const keys = (await idbKeys('snapinfo:')).sort().reverse();
+    const out: SnapInfo[] = [];
+    for (const k of keys) {
+      try {
+        const v = await IDB.get(k);
+        if (v) out.push(v);
+      } catch (e) { /* yoksay */ }
+    }
+    return out;
+  },
+  /** Ham veya taşınmış durumun tam kopyasını saklar. Son 8 kopya tutulur. */
+  async save(raw: any, reason: string): Promise<void> {
+    if (!raw || typeof raw !== 'object') return;
+    try {
+      const at = Date.now();
+      const sum = summarize(raw);
+      const list = await Snap.list();
+      const last = list[0];
+      if (last && at - last.at < 60000 && last.items === sum.items && last.stars === sum.stars) return;
+      const key = 'snap:' + at;
+      await IDB.set(key, JSON.parse(JSON.stringify({ ...raw, pinHash: raw.pinHash || null })));
+      await IDB.set('snapinfo:' + at, { key, at, reason, ...sum } as SnapInfo);
+      const all = (await Snap.list()).sort((a, b) => b.at - a.at);
+      for (const old of all.slice(MAX_SNAPSHOTS)) {
+        await IDB.del(old.key);
+        await IDB.del('snapinfo:' + old.at);
+      }
+    } catch (e) { /* yedek alınamazsa uygulama yine çalışır */ }
+  },
+  async get(key: string): Promise<any> {
+    try {
+      return await IDB.get(key);
+    } catch (e) {
+      return null;
+    }
+  },
+};
+
+const BOOT = { raw: null as any, parseError: false };
+
+async function getMeta(): Promise<DataMeta> {
+  try {
+    return (await IDB.get('meta')) || {};
+  } catch (e) {
+    return {};
+  }
+}
+async function setMeta(p: Partial<DataMeta>) {
+  try {
+    const m = await getMeta();
+    await IDB.set('meta', { ...m, ...p });
+  } catch (e) { /* yoksay */ }
+}
+
+/** Vercel'in yayına özel adresi mi (ör. proje-abc123xyz-kullanici.vercel.app)? Bu adresler güncellenmez. */
+function isDeploymentUrl(): boolean {
+  try {
+    return /-[a-z0-9]{9}-[a-z0-9-]+\.vercel\.app$/i.test(location.hostname);
+  } catch (e) {
+    return false;
+  }
+}
+
+function fmtDate(t?: number | string | null): string {
+  if (!t) return '—';
+  try {
+    return new Date(t).toLocaleString('tr-TR', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+  } catch (e) {
+    return '—';
+  }
+}
+
+function DataStatusCard({ state, update }: { state: AppState; update: (fn: (s: AppState) => AppState) => void }) {
+  const [snaps, setSnaps] = useState<SnapInfo[] | null>(null);
+  const [meta, setMetaState] = useState<DataMeta>({});
+  const [persisted, setPersisted] = useState<boolean | null>(null);
+  const [usage, setUsage] = useState<string>('');
+  const [msg, setMsg] = useState('');
+  const refresh = async () => {
+    setSnaps(await Snap.list());
+    setMetaState(await getMeta());
+    try {
+      const st: any = navigator.storage;
+      if (st && st.persisted) setPersisted(await st.persisted());
+      if (st && st.estimate) {
+        const e = await st.estimate();
+        if (e && e.usage != null) setUsage((e.usage / 1024 / 1024).toFixed(1) + ' MB');
+      }
+    } catch (e) { /* yoksay */ }
+  };
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  const counts = (['harf', 'hece', 'kelime', 'cumle'] as ContentType[]).map((t) => state.items.filter((i) => i.type === t).length);
+  const legacyCount = (state.legacy.items || []).length + Object.keys(state.legacy.fields || {}).length;
+
+  const restore = async (s: SnapInfo) => {
+    if (!(await askConfirm(fmtDate(s.at) + ' tarihli kopya geri yüklensin mi? (' + s.items + ' içerik, ' + s.stars + ' yıldız) Şu anki durumun da bir kopyası saklanır; PIN değişmez.'))) return;
+    const raw = await Snap.get(s.key);
+    const m = migrate(raw);
+    if (!m) return setMsg('Bu kopya okunamadı.');
+    await Snap.save(state, 'Geri yükleme öncesi');
+    update((cur) => ({ ...m, pinHash: cur.pinHash, pinSalt: cur.pinSalt }));
+    setMsg('Kopya geri yüklendi: ' + m.items.length + ' içerik.');
+    refresh();
+  };
+  const download = async (s: SnapInfo) => {
+    const raw = await Snap.get(s.key);
+    if (!raw) return;
+    await saveTextFile('selim-city-kopya-' + new Date(s.at).toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.json', JSON.stringify({ format: 'selim-city-backup', schema: SCHEMA_VERSION, exportedAt: new Date().toISOString(), state: { ...raw, pinHash: null }, media: {} }));
+  };
+  const snapNow = async () => {
+    await Snap.save(state, 'Elle alınan kopya');
+    setMsg('Bu cihaza bir kopya kaydedildi.');
+    refresh();
+  };
+
+  return (
+    <div className="card data-status">
+      <h3>Veri durumu</h3>
+      {isDeploymentUrl() && (
+        <p className="error-text">
+          Dikkat: Şu an yayına özel bir adresteki ({location.hostname}) uygulamayı kullanıyorsunuz. Bu adres güncellenmez. Uygulamayı Vercel'deki ana adresten açın; geçmeden önce aşağıdan tam yedek alın.
+        </p>
+      )}
+      <ul className="ds-list">
+        <li className="ok">Veriler bu cihazda iki ayrı yerde (IndexedDB ve yedek kopya) saklanıyor.</li>
+        <li className={persisted ? 'ok' : 'warn'}>
+          {persisted ? 'Tarayıcı kalıcı depolamayı onayladı; veriler otomatik temizlenmez.' : 'Kalıcı depolama onaylanmadı. iPad\'de uygulamayı ana ekrana ekleyin ve düzenli yedek alın.'}
+        </li>
+        <li className="ok">Güncellemeler verileri silmez: eski kayıtlar yeni biçime dönüştürülür, dönüştürülemeyenler ayrı saklanır{legacyCount ? ' (' + legacyCount + ' kayıt)' : ''}.</li>
+        <li className={snaps && snaps.length ? 'ok' : 'warn'}>{snaps && snaps.length ? snaps.length + ' otomatik kopya var (son: ' + fmtDate(snaps[0].at) + ').' : 'Henüz otomatik kopya yok.'}</li>
+      </ul>
+      <p className="small">
+        <b>Veriler bu adrese bağlıdır:</b> {location.origin}. Uygulamayı başka bir adresten açarsanız (ör. yayına özel bir Vercel adresi) veriler orada görünmez; tam yedekle taşıyın.
+      </p>
+      <div className="stat-grid">
+        <div className="stat"><b>{counts[0]} / {counts[1]}</b><span>harf / hece</span></div>
+        <div className="stat"><b>{counts[2]} / {counts[3]}</b><span>kelime / cümle</span></div>
+        <div className="stat"><b>{Object.keys(state.wordImages).length}</b><span>kelime görseli</span></div>
+        <div className="stat"><b>{state.totalStars} ★</b><span>{Object.keys(state.cityObjects).length} şehir nesnesi</span></div>
+      </div>
+      <p className="small muted">
+        Son kayıt: {fmtDate(state.updatedAt)} · Son manuel yedek: {fmtDate(meta.lastManualBackupAt)} · Son güncelleme/taşıma: {fmtDate(meta.lastMigrationAt)}
+        {meta.lastMigrationFrom != null ? ' (veri sürümü ' + meta.lastMigrationFrom + ' → ' + SCHEMA_VERSION + ')' : ''} · Uygulama: {APP_BUILD}{usage ? ' · Kullanılan alan: ' + usage : ''}
+      </p>
+      <h4>Otomatik kopyalar (bu cihazda)</h4>
+      {!snaps ? (
+        <p className="muted small">Yükleniyor…</p>
+      ) : snaps.length === 0 ? (
+        <p className="muted small">Kopya yok. Uygulama her gün ve her güncellemeden önce otomatik kopya alır.</p>
+      ) : (
+        <div className="snap-list">
+          {snaps.map((s) => (
+            <div key={s.key} className="snap-row">
+              <span>
+                <b>{fmtDate(s.at)}</b> · {s.reason}
+                <br />
+                <span className="muted small">{s.items} içerik ({s.words} kelime) · {s.stars} yıldız</span>
+              </span>
+              <span className="row gap">
+                <button className="btn small ghost" onClick={() => download(s)}>İndir</button>
+                <button className="btn small primary" onClick={() => restore(s)}>Geri yükle</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <button className="btn ghost" onClick={snapNow}>Şimdi kopya al</button>
+      {msg && <p className="ok-text">{msg}</p>}
+    </div>
+  );
+}
+
+/* ============================================================
+   BÜYÜK / KÜÇÜK HARF GÖSTERİMİ
+   ============================================================ */
+type DisplayCase = 'upper' | 'lower' | 'both' | 'title' | 'titleBoth';
+type CaseConv = (s: string, first: boolean) => string;
+
+function trTitleWord(s: string): string {
+  return s ? trUpper(s.charAt(0)) + trLower(s.slice(1)) : s;
+}
+const convUpper: CaseConv = (s) => trUpper(s);
+const convLower: CaseConv = (s) => trLower(s);
+const convTitle: CaseConv = (s, first) => (first ? trTitleWord(s) : trLower(s));
+
+function caseConvs(mode: DisplayCase): CaseConv[] {
+  switch (mode) {
+    case 'upper':
+      return [convUpper];
+    case 'lower':
+      return [convLower];
+    case 'title':
+      return [convTitle];
+    case 'titleBoth':
+      return [convTitle, convLower];
+    default:
+      return [convUpper, convLower];
+  }
+}
+function isTwoLine(mode: DisplayCase): boolean {
+  return mode === 'both' || mode === 'titleBoth';
+}
+/** Bütün bir metni (birden çok kelime olabilir) verilen kurala göre çevirir. */
+function applyConv(text: string, conv: CaseConv): string {
+  return text
+    .split(' ')
+    .map((w) => conv(w, true))
+    .join(' ');
+}
+function resolveCase(setting: LetterCase): DisplayCase {
+  if (setting === 'mixed') {
+    const r = Math.random();
+    return r < 0.4 ? 'upper' : r < 0.75 ? 'lower' : 'title';
+  }
+  return setting as DisplayCase;
+}
+
+/* ============================================================
+   ARAÇLAR: GERÇEKÇİ ARABALAR VE YENİ ÖDÜL ARAÇLARI
+   ============================================================ */
+const CAR_PAINTS: Array<{ c: string; name: string }> = [
+  { c: '#E8473B', name: 'Kırmızı' },
+  { c: '#2F80ED', name: 'Mavi' },
+  { c: '#F4F6FA', name: 'Beyaz' },
+  { c: '#1F2433', name: 'Siyah' },
+  { c: '#B8C4D9', name: 'Gümüş' },
+  { c: '#2DBE9B', name: 'Yeşil' },
+  { c: '#FFC23D', name: 'Sarı' },
+  { c: '#7A3BD6', name: 'Mor' },
+];
+
+type RealStyle = 'bavyera' | 'sportif' | 'prag' | 'paris' | 'luks';
+const REAL_STYLES: Record<RealStyle, { body: 'sedan' | 'hatch' | 'estate'; color: string }> = {
+  bavyera: { body: 'sedan', color: '#2F80ED' },
+  sportif: { body: 'sedan', color: '#B8C4D9' },
+  prag: { body: 'estate', color: '#2DBE9B' },
+  paris: { body: 'hatch', color: '#FFC23D' },
+  luks: { body: 'sedan', color: '#1F2433' },
+};
+
+function paintMat(color: string) {
+  return mat(color, { metalness: 0.35, roughness: 0.32 });
+}
+const GLASS = () => mat('#1C2740', { metalness: 0.6, roughness: 0.08 });
+const CHROME = () => mat('#D9DEE8', { metalness: 0.85, roughness: 0.2 });
+const RUBBER = () => mat('#1A1D27', { roughness: 0.8 });
+
+function extrudeSide(shape: any, width: number, material: any, bevel = 0.07) {
+  const g = new THREE.ExtrudeGeometry(shape, { depth: width, bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 4, curveSegments: 16 });
+  g.translate(0, 0, -width / 2);
+  return mesh(g, material);
+}
+
+function addWheels(g: any, xs: number[], halfW: number, r = 0.34) {
+  const tire = new THREE.CylinderGeometry(r, r, 0.26, 28);
+  const rim = new THREE.CylinderGeometry(r * 0.64, r * 0.64, 0.27, 20);
+  const hub = new THREE.CylinderGeometry(r * 0.18, r * 0.18, 0.28, 12);
+  xs.forEach((x) =>
+    [-1, 1].forEach((s) => {
+      const t = mesh(tire, RUBBER());
+      t.rotation.x = Math.PI / 2;
+      t.position.set(x, r, s * halfW);
+      g.add(t);
+      const rr = mesh(rim, CHROME());
+      rr.rotation.x = Math.PI / 2;
+      rr.position.set(x, r, s * (halfW + 0.005));
+      g.add(rr);
+      for (let k = 0; k < 5; k++) {
+        const sp = mesh(new THREE.BoxGeometry(r * 1.05, 0.05, 0.03), mat('#9AA6BD', { metalness: 0.7, roughness: 0.3 }));
+        sp.rotation.z = (k / 5) * Math.PI;
+        sp.position.set(x, r, s * (halfW + 0.14));
+        g.add(sp);
+      }
+      const h = mesh(hub, mat('#5B6383', { metalness: 0.6 }));
+      h.rotation.x = Math.PI / 2;
+      h.position.set(x, r, s * halfW);
+      g.add(h);
+    })
+  );
+}
+
+function makeRealCar(style: RealStyle, color?: string) {
+  const def = REAL_STYLES[style];
+  const paint = paintMat(color || def.color);
+  const g = new THREE.Group();
+  const W = 1.36;
+  const body = def.body;
+  // alt gövde (yandan profil)
+  const lo = new THREE.Shape();
+  const rearX = body === 'hatch' ? -1.52 : -1.7;
+  lo.moveTo(rearX + 0.04, 0.3);
+  lo.lineTo(rearX, 0.62);
+  lo.quadraticCurveTo(rearX, 0.86, rearX + 0.22, 0.88);
+  lo.lineTo(1.0, 0.9);
+  lo.quadraticCurveTo(1.45, 0.84, 1.66, 0.72);
+  lo.quadraticCurveTo(1.76, 0.62, 1.73, 0.44);
+  lo.lineTo(1.66, 0.3);
+  lo.lineTo(rearX + 0.04, 0.3);
+  g.add(extrudeSide(lo, W, paint));
+  // cam kabin
+  const cab = new THREE.Shape();
+  if (body === 'sedan') {
+    cab.moveTo(-1.08, 0.88);
+    cab.quadraticCurveTo(-0.78, 0.94, -0.58, 1.18);
+    cab.quadraticCurveTo(-0.42, 1.28, -0.16, 1.29);
+  } else if (body === 'hatch') {
+    cab.moveTo(-1.46, 0.88);
+    cab.lineTo(-1.36, 1.2);
+    cab.quadraticCurveTo(-1.28, 1.28, -1.06, 1.29);
+  } else {
+    cab.moveTo(-1.62, 0.88);
+    cab.lineTo(-1.56, 1.18);
+    cab.quadraticCurveTo(-1.5, 1.27, -1.28, 1.28);
+  }
+  cab.lineTo(0.36, 1.29);
+  cab.quadraticCurveTo(0.56, 1.27, 0.8, 1.05);
+  cab.lineTo(1.04, 0.88);
+  cab.closePath();
+  g.add(extrudeSide(cab, W - 0.14, GLASS(), 0.05));
+  // tavan ve direkler
+  const roofStart = body === 'sedan' ? -0.4 : body === 'hatch' ? -1.22 : -1.42;
+  const roof = mesh(new THREE.BoxGeometry(0.42 - roofStart, 0.06, W - 0.06), paint);
+  roof.position.set((0.42 + roofStart) / 2, 1.3, 0);
+  g.add(roof);
+  const bp = mesh(new THREE.BoxGeometry(0.1, 0.42, W - 0.02), paint);
+  bp.position.set(body === 'sedan' ? -0.12 : -0.3, 1.08, 0);
+  g.add(bp);
+  // farlar, stoplar, tampon, plaka, ayna
+  [-1, 1].forEach((s) => {
+    const hl = mesh(new THREE.BoxGeometry(0.06, 0.09, 0.3), mat('#F7FBFF', { emissive: '#DDEBFF', emissiveIntensity: 0.6 }));
+    hl.position.set(1.71, 0.66, s * 0.47);
+    hl.rotation.y = s * 0.15;
+    g.add(hl);
+    const tl = mesh(new THREE.BoxGeometry(0.06, 0.08, 0.34), mat('#E2231A', { emissive: '#B0100A', emissiveIntensity: 0.5 }));
+    tl.position.set(rearX - 0.03, 0.74, s * 0.46);
+    g.add(tl);
+    const mr = mesh(new THREE.BoxGeometry(0.14, 0.1, 0.08), paint);
+    mr.position.set(0.86, 1.0, s * (W / 2 + 0.1));
+    g.add(mr);
+  });
+  const bump = mesh(new THREE.BoxGeometry(0.12, 0.12, W - 0.1), mat('#2A2F3D', { roughness: 0.6 }));
+  bump.position.set(1.7, 0.36, 0);
+  g.add(bump);
+  const bump2 = bump.clone();
+  bump2.position.set(rearX - 0.02, 0.36, 0);
+  g.add(bump2);
+  const plate = mesh(new THREE.BoxGeometry(0.03, 0.1, 0.34), mat('#FFFFFF'));
+  plate.position.set(1.77, 0.48, 0);
+  g.add(plate);
+  const plate2 = plate.clone();
+  plate2.position.set(rearX - 0.07, 0.56, 0);
+  g.add(plate2);
+  // ön ızgara (marka logosu yok; yalnızca tasarım dili)
+  const black = mat('#11141C', { roughness: 0.5 });
+  const addGrille = (w: number, h: number, y: number, z = 0) => {
+    const fr = mesh(new THREE.BoxGeometry(0.05, h + 0.04, w + 0.04), CHROME());
+    fr.position.set(1.735, y, z);
+    g.add(fr);
+    const gr = mesh(new THREE.BoxGeometry(0.06, h, w), black);
+    gr.position.set(1.745, y, z);
+    g.add(gr);
+  };
+  if (style === 'bavyera') {
+    addGrille(0.16, 0.16, 0.6, -0.11);
+    addGrille(0.16, 0.16, 0.6, 0.11);
+  } else if (style === 'sportif') {
+    addGrille(0.5, 0.26, 0.52);
+  } else if (style === 'prag') {
+    addGrille(0.5, 0.2, 0.58);
+    for (let i = 0; i < 7; i++) {
+      const bar = mesh(new THREE.BoxGeometry(0.07, 0.18, 0.02), CHROME());
+      bar.position.set(1.76, 0.58, -0.21 + i * 0.07);
+      g.add(bar);
+    }
+  } else if (style === 'paris') {
+    addGrille(0.46, 0.08, 0.62);
+    addGrille(0.6, 0.14, 0.44);
+  } else {
+    addGrille(0.56, 0.2, 0.58);
+    const bar = mesh(new THREE.BoxGeometry(0.08, 0.025, 0.56), CHROME());
+    bar.position.set(1.77, 0.58, 0);
+    g.add(bar);
+    const em = mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.03, 20), CHROME());
+    em.rotation.z = Math.PI / 2;
+    em.position.set(1.78, 0.58, 0);
+    g.add(em);
+  }
+  addWheels(g, body === 'hatch' ? [-0.98, 1.06] : [-1.08, 1.1], W / 2 + 0.02);
+  return g;
+}
+
+function makeAmbulance(color = '#F4F6FA') {
+  const g = new THREE.Group();
+  const W = 1.5;
+  const paint = paintMat(color);
+  const lo = new THREE.Shape();
+  lo.moveTo(-1.76, 0.3);
+  lo.lineTo(-1.78, 1.0);
+  lo.lineTo(1.25, 1.0);
+  lo.lineTo(1.66, 0.82);
+  lo.quadraticCurveTo(1.78, 0.7, 1.75, 0.42);
+  lo.lineTo(1.68, 0.3);
+  lo.closePath();
+  g.add(extrudeSide(lo, W, paint));
+  const box = new THREE.Shape();
+  box.moveTo(-1.78, 0.98);
+  box.lineTo(-1.78, 1.9);
+  box.quadraticCurveTo(-1.76, 1.98, -1.66, 1.98);
+  box.lineTo(0.5, 1.98);
+  box.lineTo(0.5, 0.98);
+  box.closePath();
+  g.add(extrudeSide(box, W, paint, 0.05));
+  const cab = new THREE.Shape();
+  cab.moveTo(0.48, 0.98);
+  cab.lineTo(0.48, 1.86);
+  cab.lineTo(0.76, 1.86);
+  cab.quadraticCurveTo(0.95, 1.8, 1.22, 1.0);
+  cab.closePath();
+  g.add(extrudeSide(cab, W - 0.14, GLASS(), 0.04));
+  [-1, 1].forEach((s) => {
+    const stripe = mesh(new THREE.BoxGeometry(3.4, 0.14, 0.02), mat('#E2231A'));
+    stripe.position.set(-0.05, 0.86, s * (W / 2 + 0.08));
+    g.add(stripe);
+    const c1 = mesh(new THREE.BoxGeometry(0.56, 0.16, 0.02), mat('#E2231A'));
+    c1.position.set(-0.75, 1.5, s * (W / 2 + 0.06));
+    g.add(c1);
+    const c2 = mesh(new THREE.BoxGeometry(0.16, 0.56, 0.02), mat('#E2231A'));
+    c2.position.set(-0.75, 1.5, s * (W / 2 + 0.06));
+    g.add(c2);
+    const hl = mesh(new THREE.BoxGeometry(0.06, 0.1, 0.3), mat('#F7FBFF', { emissive: '#DDEBFF', emissiveIntensity: 0.6 }));
+    hl.position.set(1.73, 0.66, s * 0.5);
+    g.add(hl);
+  });
+  [-0.45, 0.45].forEach((z) => {
+    const l = mesh(new THREE.BoxGeometry(0.3, 0.12, 0.34), mat(z < 0 ? '#2F80ED' : '#E2231A', { emissive: z < 0 ? '#1D5FD6' : '#C01010', emissiveIntensity: 0.8 }));
+    l.position.set(0.2, 2.06, z);
+    g.add(l);
+  });
+  addWheels(g, [-1.1, 1.1], W / 2 + 0.02, 0.36);
+  return g;
+}
+
+function makeMotorcycle(color = '#E8473B') {
+  const g = new THREE.Group();
+  const paint = paintMat(color);
+  [-0.78, 0.78].forEach((x) => {
+    const t = mesh(new THREE.TorusGeometry(0.32, 0.1, 14, 28), RUBBER());
+    t.position.set(x, 0.42, 0);
+    g.add(t);
+    const r = mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.06, 20), CHROME());
+    r.rotation.x = Math.PI / 2;
+    r.position.set(x, 0.42, 0);
+    g.add(r);
+  });
+  const eng = mesh(new THREE.BoxGeometry(0.55, 0.36, 0.32), mat('#5B6383', { metalness: 0.6, roughness: 0.3 }));
+  eng.position.set(-0.05, 0.62, 0);
+  g.add(eng);
+  const tank = mesh(new THREE.SphereGeometry(0.3, 20, 14), paint);
+  tank.scale.set(1.4, 0.75, 0.9);
+  tank.position.set(0.18, 1.0, 0);
+  g.add(tank);
+  const seat = mesh(new THREE.BoxGeometry(0.62, 0.1, 0.3), mat('#1A1D27', { roughness: 0.7 }));
+  seat.position.set(-0.38, 0.98, 0);
+  g.add(seat);
+  const tail = mesh(new THREE.BoxGeometry(0.4, 0.12, 0.28), paint);
+  tail.position.set(-0.72, 0.92, 0);
+  tail.rotation.z = 0.25;
+  g.add(tail);
+  [-0.09, 0.09].forEach((z) => {
+    const fork = mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.9, 10), CHROME());
+    fork.position.set(0.66, 0.85, z);
+    fork.rotation.z = 0.35;
+    g.add(fork);
+  });
+  const bar = mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.75, 10), CHROME());
+  bar.rotation.x = Math.PI / 2;
+  bar.position.set(0.5, 1.3, 0);
+  g.add(bar);
+  const lamp = mesh(new THREE.SphereGeometry(0.11, 14, 10), mat('#F7FBFF', { emissive: '#DDEBFF', emissiveIntensity: 0.7 }));
+  lamp.position.set(0.68, 1.12, 0);
+  g.add(lamp);
+  const ex = mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.8, 12), CHROME());
+  ex.rotation.z = Math.PI / 2 - 0.12;
+  ex.position.set(-0.45, 0.45, 0.2);
+  g.add(ex);
+  return g;
+}
+
+function makeScooter(color = '#4FD1B0') {
+  const g = new THREE.Group();
+  const paint = paintMat(color);
+  [-0.62, 0.62].forEach((x) => {
+    const t = mesh(new THREE.TorusGeometry(0.22, 0.08, 12, 24), RUBBER());
+    t.position.set(x, 0.3, 0);
+    g.add(t);
+    const r = mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.06, 18), CHROME());
+    r.rotation.x = Math.PI / 2;
+    r.position.set(x, 0.3, 0);
+    g.add(r);
+  });
+  const cowl = mesh(new THREE.SphereGeometry(0.36, 20, 14), paint);
+  cowl.scale.set(1.4, 0.9, 1.0);
+  cowl.position.set(-0.45, 0.62, 0);
+  g.add(cowl);
+  const floor = mesh(new THREE.BoxGeometry(0.62, 0.08, 0.36), paint);
+  floor.position.set(0.05, 0.36, 0);
+  g.add(floor);
+  const shield = mesh(new THREE.BoxGeometry(0.1, 0.8, 0.44), paint);
+  shield.position.set(0.42, 0.74, 0);
+  shield.rotation.z = -0.22;
+  g.add(shield);
+  const fender = mesh(new THREE.SphereGeometry(0.24, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), paint);
+  fender.position.set(0.62, 0.36, 0);
+  g.add(fender);
+  const seat = mesh(new THREE.BoxGeometry(0.6, 0.12, 0.32), mat('#5B3A1E', { roughness: 0.6 }));
+  seat.position.set(-0.4, 0.98, 0);
+  g.add(seat);
+  const stem = mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.5, 10), CHROME());
+  stem.position.set(0.5, 1.2, 0);
+  g.add(stem);
+  const bar = mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.62, 10), CHROME());
+  bar.rotation.x = Math.PI / 2;
+  bar.position.set(0.5, 1.44, 0);
+  g.add(bar);
+  const lamp = mesh(new THREE.SphereGeometry(0.1, 14, 10), mat('#F7FBFF', { emissive: '#DDEBFF', emissiveIntensity: 0.7 }));
+  lamp.position.set(0.58, 1.38, 0);
+  g.add(lamp);
+  return g;
+}
+
+const VEHICLE_BUILDERS: Record<string, (color?: string) => any> = {
+  bavyera: (c) => makeRealCar('bavyera', c),
+  sportif: (c) => makeRealCar('sportif', c),
+  prag: (c) => makeRealCar('prag', c),
+  paris: (c) => makeRealCar('paris', c),
+  luks: (c) => makeRealCar('luks', c),
+  ambulans: (c) => makeAmbulance(c),
+  motosiklet: (c) => makeMotorcycle(c),
+  scooter: (c) => makeScooter(c),
+  ucak: () => {
+    const p = makePlaneModel();
+    p.position.y = -0.6;
+    return p;
+  },
+};
+
+function activeCars(state: AppState): Unlockable[] {
+  const vr = state.settings.vehicleRewards || {};
+  return CARS.filter((c) => c.need === 0 || vr[c.id] !== false);
+}
+
+/* ============================================================
+   KELİME KUTULARI (Yapı Atölyesi): SÜRÜKLE-BIRAK, BEŞ MOD
+   ============================================================ */
+type BoxMode = 'hece' | 'resim' | 'dinle' | 'karisik' | 'harf';
+const BOX_MODES: Array<{ id: BoxMode; name: string; desc: string }> = [
+  { id: 'hece', name: 'Heceleri diz', desc: 'Heceleri sırayla kutulara yerleştir.' },
+  { id: 'resim', name: 'Resme göre', desc: 'Her kelimeyi resmine uygun kutuya koy.' },
+  { id: 'dinle', name: 'Dinle ve koy', desc: 'Duyduğun kelimeyi kutuya koy.' },
+  { id: 'karisik', name: 'Karışık', desc: 'Kelimeleri ipucuna göre doğru kutuya koy.' },
+  { id: 'harf', name: 'Büyük – küçük', desc: 'Küçük harfli kelimeyi büyük harfli eşine koy.' },
+];
+
+interface BoxDef {
+  id: string;
+  expects: string;
+  kind: 'slot' | 'image' | 'listen' | 'hint' | 'upper';
+  item?: Item;
+  label?: string;
+  filled?: string | null;
+}
+interface CardDef {
+  id: string;
+  text: string;
+  itemId: string;
+  placed?: boolean;
+}
+
+function BoxGame({
+  state,
+  update,
+  onHome,
+  onCommitSuccess,
+  onAttempt,
+  onCelebrate,
+}: {
+  state: AppState;
+  update: (fn: (s: AppState) => AppState) => void;
+  onHome: () => void;
+  onCommitSuccess: (itemId: string, verifier: Verifier, retries: number) => boolean;
+  onAttempt: (itemId: string) => void;
+  onCelebrate: () => void;
+}) {
+  const s = state.settings;
+  const name = s.childName;
+  const pick = useMessagePicker();
+  const words = useMemo(() => state.items.filter((i) => i.type === 'kelime' && i.approved && i.active), [state.items]);
+  const singleWords = useMemo(() => words.filter((w) => !w.text.includes(' ')), [words]);
+  const hecePool = useMemo(() => singleWords.filter((w) => itemSylls(w).length >= 2 && itemSylls(w).length <= 4), [singleWords]);
+  const withImage = useMemo(() => words.filter((w) => state.wordImages[w.id] || MEANINGS[normalize(w.text)]), [words, state.wordImages]);
+  const syllPool = useMemo(() => state.items.filter((i) => i.type === 'hece' && i.approved && i.active).map((i) => trUpper(i.text)), [state.items]);
+  const recent = useRef<string[]>([]);
+  const [mode, setMode] = useState<BoxMode>(hecePool.length ? 'hece' : 'karisik');
+  const [round, setRound] = useState<null | { boxes: BoxDef[]; cards: CardDef[]; primary: Item; caseMode: DisplayCase; target?: Item; note?: string }>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [retries, setRetries] = useState(0);
+  const [done, setDone] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [shake, setShake] = useState<string | null>(null);
+  const [pop, setPop] = useState<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [hover, setHover] = useState<string | null>(null);
+  const ghost = useRef<HTMLDivElement | null>(null);
+  const drag = useRef<null | { id: string; sx: number; sy: number; moved: boolean }>(null);
+  const hoverRef = useRef<string | null>(null);
+  const boxEls = useRef<Record<string, HTMLElement | null>>({});
+
+  const levelFor = (m: BoxMode) => {
+    if (s.boxDifficulty !== 'auto') return Number(s.boxDifficulty);
+    return Math.max(2, Math.min(4, (state.boxGame.level && state.boxGame.level[m]) || 2));
+  };
+  const level = levelFor(mode);
+
+  const pickDistinct = (pool: Item[], n: number, first?: Item, keyFn: (i: Item) => string = (i) => normalize(i.text)) => {
+    const out: Item[] = first ? [first] : [];
+    const keys = new Set(out.map(keyFn));
+    for (const it of shuffle(pool)) {
+      if (out.length >= n) break;
+      const k = keyFn(it);
+      if (keys.has(k)) continue;
+      keys.add(k);
+      out.push(it);
+    }
+    return out;
+  };
+
+  const makeRound = (m: BoxMode) => {
+    const n = levelFor(m);
+    const cm = resolveCase(s.letterCase);
+    let note = '';
+    if (m === 'hece') {
+      const item = pickNext(hecePool, recent.current);
+      if (!item) return null;
+      recent.current = [...recent.current, item.id].slice(-4);
+      const sy = itemSylls(item);
+      const boxes: BoxDef[] = sy.map((x, i) => ({ id: 'b' + i, expects: x, kind: 'slot', label: String(i + 1) }));
+      const cards: CardDef[] = sy.map((x, i) => ({ id: 'c' + i, text: x, itemId: item.id }));
+      if (n >= 3) {
+        const d = shuffle(syllPool.filter((x) => !sy.includes(x))).slice(0, n - 2);
+        d.forEach((x, i) => cards.push({ id: 'x' + i, text: x, itemId: item.id }));
+      }
+      return { boxes, cards: shuffle(cards), primary: item, caseMode: cm };
+    }
+    let mm = m;
+    if (mm === 'resim' && withImage.length < 2) {
+      mm = 'karisik';
+      note = 'Resimli kelime az olduğu için ipuçlarıyla oynuyoruz.';
+    }
+    const pool = mm === 'resim' ? withImage : mm === 'harf' ? words : singleWords;
+    if (pool.length < 2) return null;
+    if (mm === 'dinle') {
+      const target = pickNext(pool, recent.current)!;
+      recent.current = [...recent.current, target.id].slice(-4);
+      const tn = normalize(target.text);
+      const others = pool
+        .filter((p) => normalize(p.text) !== tn)
+        .map((o) => ({ o, d: lev(normalize(o.text), tn) + Math.random() * 1.5 }))
+        .sort((a, b) => a.d - b.d)
+        .map((x) => x.o);
+      const set = pickDistinct(others, n - 1);
+      const cards = shuffle([target, ...set]).map((w, i) => ({ id: 'c' + i, text: w.text, itemId: w.id }));
+      return { boxes: [{ id: 'b0', expects: target.text, kind: 'listen' as const }], cards, primary: target, caseMode: cm, target, note };
+    }
+    const firstSyl = (i: Item) => itemSylls(i)[0] || trUpper(i.text).charAt(0);
+    const set = pickDistinct(pool, n, pickNext(pool, recent.current) || undefined, mm === 'karisik' ? (i) => firstSyl(i) : undefined);
+    if (set.length < 2) return null;
+    recent.current = [...recent.current, set[0].id].slice(-4);
+    const boxes: BoxDef[] = shuffle(set).map((w, i) => ({
+      id: 'b' + i,
+      expects: w.text,
+      kind: mm === 'resim' ? 'image' : mm === 'harf' ? 'upper' : 'hint',
+      item: w,
+      label: mm === 'harf' ? trUpper(w.text) : mm === 'karisik' ? trUpper(firstSyl(w)) + '…' : undefined,
+    }));
+    const cards = shuffle(set).map((w, i) => ({ id: 'c' + i, text: w.text, itemId: w.id }));
+    return { boxes, cards, primary: set[0], caseMode: mm === 'harf' ? ('lower' as DisplayCase) : cm, note };
+  };
+
+  const start = (m: BoxMode) => {
+    Speech.stop();
+    const r = makeRound(m);
+    setRound(r);
+    setSelected(null);
+    setRetries(0);
+    setDone(false);
+    setShake(null);
+    setPop(null);
+    if (!r) return;
+    const desc = BOX_MODES.find((x) => x.id === m)!.desc;
+    setMsg(r.note || desc);
+    if (m === 'dinle' && r.target) {
+      const t = r.target;
+      Speech.speak('Duyduğun kelimeyi kutuya koy.', { role: 'teacher' }).then(() => Speech.speak(trLower(t.text), { keep: true, rate: Speech.contentRate + 0.1 }));
+    } else Speech.speak(desc, { role: 'teacher' });
+  };
+
+  useEffect(() => {
+    start(mode);
+  }, []);
+
+  const showText = (text: string, cm: DisplayCase) => caseConvs(cm).map((c) => applyConv(text, c));
+
+  const finish = (r: NonNullable<typeof round>, tries: number) => {
+    setDone(true);
+    onCelebrate();
+    const m = tries > 0 ? pick('effort', name) : pick('success', name);
+    setMsg(m);
+    onCommitSuccess(r.primary.id, 'tap', tries);
+    const ev: SuccessEvent = tries > 0 ? 'caba' : mode === 'hece' ? 'heceBirlestirme' : 'genelBasari';
+    if (mode === 'hece' || mode === 'dinle') Speech.speak(trLower(r.primary.text) + '!', { rate: Speech.contentRate + 0.1 }).then(() => praiseWith(ev, m));
+    else praiseWith(ev, m);
+    // zorluk: zorlamadan yavaşça artar, zorlanırsa azalır
+    if (s.boxDifficulty === 'auto') {
+      update((st) => {
+        const lv = { ...(st.boxGame.level || {}) };
+        const sk = { ...(st.boxGame.streak || {}) };
+        const cur = lv[mode] || 2;
+        if (tries === 0) {
+          sk[mode] = (sk[mode] || 0) + 1;
+          if (sk[mode] >= 3 && cur < 4) {
+            lv[mode] = cur + 1;
+            sk[mode] = 0;
+          }
+        } else {
+          sk[mode] = 0;
+          if (tries >= 3 && cur > 2) lv[mode] = cur - 1;
+        }
+        return { ...st, boxGame: { level: lv, streak: sk } };
+      });
+    }
+  };
+
+  const drop = (cardId: string, boxId: string) => {
+    if (!round || done) return;
+    const card = round.cards.find((c) => c.id === cardId);
+    const box = round.boxes.find((b) => b.id === boxId);
+    if (!card || !box || box.filled || card.placed) return;
+    setSelected(null);
+    if (normalize(card.text) === normalize(box.expects)) {
+      const boxes = round.boxes.map((b) => (b.id === boxId ? { ...b, filled: cardId } : b));
+      const cards = round.cards.map((c) => (c.id === cardId ? { ...c, placed: true } : c));
+      const nr = { ...round, boxes, cards };
+      setRound(nr);
+      setPop(boxId);
+      setTimeout(() => setPop((p) => (p === boxId ? null : p)), 900);
+      Sfx.play([[784, 0.08], [1047, 0.14]], 'triangle');
+      if (mode === 'hece') Speech.speak(trLower(card.text), { rate: Speech.contentRate });
+      if (boxes.every((b) => b.filled)) setTimeout(() => finish(nr, retries), 350);
+    } else {
+      setShake(boxId);
+      setTimeout(() => setShake((x) => (x === boxId ? null : x)), 550);
+      Sfx.soft();
+      const tries = retries + 1;
+      setRetries(tries);
+      onAttempt(round.primary.id);
+      if (tries <= 2) {
+        const m = pick('retry', name);
+        setMsg(m);
+        instructWith(tries >= 2 ? 'zorlandiginda' : 'tekrarDene', m);
+      }
+    }
+  };
+
+  const boxAt = (x: number, y: number): string | null => {
+    for (const id of Object.keys(boxEls.current)) {
+      const el = boxEls.current[id];
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (x >= r.left - 12 && x <= r.right + 12 && y >= r.top - 12 && y <= r.bottom + 12) return id;
+    }
+    return null;
+  };
+  const onDown = (e: any, c: CardDef) => {
+    if (c.placed || done) return;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (er) { /* yoksay */ }
+    drag.current = { id: c.id, sx: e.clientX, sy: e.clientY, moved: false };
+  };
+  const onMove = (e: any) => {
+    const d = drag.current;
+    if (!d) return;
+    if (!d.moved && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 8) {
+      d.moved = true;
+      setDragId(d.id);
+      setSelected(null);
+    }
+    if (d.moved) {
+      if (ghost.current) ghost.current.style.transform = 'translate(' + e.clientX + 'px,' + e.clientY + 'px) translate(-50%,-50%) rotate(-3deg) scale(1.06)';
+      const b = boxAt(e.clientX, e.clientY);
+      if (b !== hoverRef.current) {
+        hoverRef.current = b;
+        setHover(b);
+      }
+    }
+  };
+  const onUp = (e: any) => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d) return;
+    if (d.moved) {
+      const b = boxAt(e.clientX, e.clientY);
+      setDragId(null);
+      setHover(null);
+      hoverRef.current = null;
+      if (b) drop(d.id, b);
+    } else {
+      const c = round && round.cards.find((x) => x.id === d.id);
+      setSelected((sel) => (sel === d.id ? null : d.id));
+      if (c) Speech.speak(trLower(c.text), { rate: Speech.contentRate });
+    }
+  };
+
+  const header = (
+    <header className="topbar">
+      <button className="back-btn" onClick={onHome} aria-label="Haritaya dön">←</button>
+      <span className="game-title">Kelime Kutuları</span>
+      <HudStars stars={state.totalStars} />
+    </header>
+  );
+
+  if (words.length < 2 && !hecePool.length) {
+    return (
+      <main className="screen game-screen">
+        {header}
+        <GameEmpty a={state.city.avatar} title="Kutular boş" text="Ebeveyn panelinden en az iki kelime eklenip onaylanınca kutu oyunları açılır." onHome={onHome} />
+      </main>
+    );
+  }
+
+  const dragCard = round && dragId ? round.cards.find((c) => c.id === dragId) : null;
+
+  return (
+    <main className="screen game-screen box-screen" onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
+      {header}
+      <nav className="k-modes box-modes" aria-label="Kutu oyunu modu">
+        {BOX_MODES.map((m) => (
+          <button
+            key={m.id}
+            className={'k-mode' + (mode === m.id ? ' on' : '')}
+            disabled={(m.id === 'hece' && !hecePool.length) || (m.id !== 'hece' && words.length < 2)}
+            onClick={() => {
+              setMode(m.id);
+              start(m.id);
+            }}
+          >
+            <span>{m.name}</span>
+          </button>
+        ))}
+      </nav>
+      <div className="prompt-row">
+        <PlayerPortrait a={state.city.avatar} size={56} />
+        <p className="bubble" aria-live="polite">{msg}</p>
+        <span className="box-level" title="Kutu sayısı">
+          {[2, 3, 4].map((x) => <i key={x} className={x <= level ? 'on' : ''} />)}
+        </span>
+      </div>
+      {!round ? (
+        <GameEmpty a={state.city.avatar} title="Bu mod için kelime yetmedi" text="Başka bir mod seç ya da ebeveyn panelinden kelime ekle." onHome={onHome} />
+      ) : (
+        <>
+          <div className={'box-row n' + round.boxes.length + (mode === 'hece' ? ' slots' : '')}>
+            {round.boxes.map((b) => {
+              const filled = b.filled ? round.cards.find((c) => c.id === b.filled) : null;
+              return (
+                <button
+                  key={b.id}
+                  ref={(el) => (boxEls.current[b.id] = el)}
+                  className={'wbox' + (b.filled ? ' ok' : '') + (hover === b.id ? ' hover' : '') + (shake === b.id ? ' shake' : '') + (pop === b.id ? ' pop' : '') + (selected ? ' armed' : '')}
+                  onClick={() => (selected ? drop(selected, b.id) : b.kind === 'listen' && round.target ? Speech.speak(trLower(round.target.text), { rate: Speech.contentRate + 0.1 }) : null)}
+                  aria-label={b.kind === 'listen' ? 'Kelimeyi tekrar dinle veya kutuya koy' : 'Kutu'}
+                >
+                  <span className="wbox-label">
+                    {b.kind === 'image' && b.item && <MeaningImage item={b.item} state={state} className="box-img" />}
+                    {b.kind === 'hint' && b.item && (state.wordImages[b.item.id] || MEANINGS[normalize(b.item.text)]) ? <MeaningImage item={b.item} state={state} className="box-img small" /> : null}
+                    {b.kind === 'hint' && <b className="wbox-hint">{b.label}</b>}
+                    {b.kind === 'upper' && <b className="wbox-upper">{b.label}</b>}
+                    {b.kind === 'slot' && <b className="wbox-num">{b.label}</b>}
+                    {b.kind === 'listen' && (
+                      <span className="wbox-listen">
+                        <svg viewBox="0 0 64 64" width="44" height="44" aria-hidden="true">
+                          <path d="M10 24h10l14-11v38L20 40H10z" fill="#fff" stroke="#1B1F3B" strokeWidth="4" strokeLinejoin="round" />
+                          <path d="M42 22c5 6 5 14 0 20" stroke="#1B1F3B" strokeWidth="5" fill="none" strokeLinecap="round" />
+                        </svg>
+                        Dinle
+                      </span>
+                    )}
+                  </span>
+                  <span className="wbox-mouth">
+                    {filled && (
+                      <span className="wcard placed">
+                        {showText(filled.text, round.caseMode).map((t, i) => <span key={i} className={i ? 'wc-low' : ''}>{t}</span>)}
+                      </span>
+                    )}
+                    {pop === b.id && <span className="wbox-star">★</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {done ? (
+            <div className="kid-actions">
+              <button className="game-btn giant" onClick={() => start(mode)}>DEVAM</button>
+            </div>
+          ) : (
+            <div className="card-tray">
+              {round.cards.map((c) => (
+                <button
+                  key={c.id}
+                  className={'wcard' + (c.placed ? ' used' : '') + (selected === c.id ? ' sel' : '') + (dragId === c.id ? ' dragging' : '')}
+                  onPointerDown={(e) => onDown(e, c)}
+                  disabled={c.placed}
+                  aria-label={c.text + ' kartı'}
+                >
+                  {showText(c.text, round.caseMode).map((t, i) => <span key={i} className={i ? 'wc-low' : ''}>{t}</span>)}
+                </button>
+              ))}
+            </div>
+          )}
+          {selected && !done && <p className="session-note">Şimdi bir kutuya dokun.</p>}
+        </>
+      )}
+      <div ref={ghost} className={'wcard ghost' + (dragCard ? ' show' : '')} aria-hidden="true">
+        {dragCard && round && showText(dragCard.text, round.caseMode).map((t, i) => <span key={i} className={i ? 'wc-low' : ''}>{t}</span>)}
+      </div>
+    </main>
+  );
+}
+
+/* ---------- Ebeveyn: araç ödülleri ve kutu zorluğu ---------- */
+function RewardsSettingsCard({ state, update }: { state: AppState; update: (fn: (s: AppState) => AppState) => void }) {
+  const s = state.settings;
+  const vr = s.vehicleRewards || {};
+  const set = (p: Partial<Settings>) => update((st) => ({ ...st, settings: { ...st.settings, ...p } }));
+  return (
+    <>
+      <div className="card">
+        <h3>Kelime Kutuları zorluğu</h3>
+        <div className="seg">
+          {([['auto', 'Otomatik'], ['2', 'Kolay (2 kutu)'], ['3', 'Orta (3 kutu)'], ['4', 'Zor (4 kutu)']] as Array<[Settings['boxDifficulty'], string]>).map(([k, l]) => (
+            <button key={k} className={s.boxDifficulty === k ? 'on' : ''} onClick={() => set({ boxDifficulty: k })}>{l}</button>
+          ))}
+        </div>
+        <p className="muted small">Otomatikte, üst üste hatasız tamamlanan turlarda kutu sayısı yavaşça artar; zorlanınca azalır.</p>
+      </div>
+      <div className="card">
+        <h3>Ödül araçları</h3>
+        <p className="muted small">Kapattığınız araçlar garajda ve ödül listesinde görünmez. İlk araba her zaman açıktır.</p>
+        <div className="vr-grid">
+          {CARS.map((c) => (
+            <label key={c.id} className="check">
+              <input
+                type="checkbox"
+                checked={c.need === 0 || vr[c.id] !== false}
+                disabled={c.need === 0}
+                onChange={(e) => set({ vehicleRewards: { ...vr, [c.id]: e.target.checked } })}
+              />
+              <span>
+                {c.name} <small className="muted">({c.need === 0 ? 'başlangıç' : c.need + '. görev'}{(c as any).special ? ', özel ödül' : ''})</small>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ============================================================
    EBEVEYN PANELİ
    ============================================================ */
 function ParentPanel({
@@ -7656,14 +8762,16 @@ function ParentPanel({
   onClose,
   syncLabel,
   voices,
+  initialTab,
 }: {
   state: AppState;
   update: (fn: (s: AppState) => AppState) => void;
   onClose: () => void;
   syncLabel: string;
   voices: SpeechSynthesisVoice[];
+  initialTab?: 'icerik' | 'yedek';
 }) {
-  const [tab, setTab] = useState<'icerik' | 'kelime' | 'hediye' | 'ses' | 'ayarlar' | 'ozet' | 'yedek'>('icerik');
+  const [tab, setTab] = useState<'icerik' | 'kelime' | 'hediye' | 'ses' | 'ayarlar' | 'ozet' | 'yedek'>(initialTab || 'icerik');
   return (
     <main className="screen parent-screen">
       <header className="parent-head">
@@ -7692,7 +8800,12 @@ function ParentPanel({
       {tab === 'ses' && <VoicePanel state={state} update={update} voices={voices} />}
       {tab === 'ayarlar' && <SettingsPanel state={state} update={update} voices={voices} />}
       {tab === 'ozet' && <SummaryPanel state={state} />}
-      {tab === 'yedek' && <BackupPanel state={state} update={update} />}
+      {tab === 'yedek' && (
+        <>
+          <DataStatusCard state={state} update={update} />
+          <BackupPanel state={state} update={update} />
+        </>
+      )}
     </main>
   );
 }
@@ -7708,7 +8821,7 @@ function ContentManager({ state, update }: { state: AppState; update: (fn: (s: A
 
   const list = state.items.filter((i) => i.type === type);
 
-  const addItems = (texts: string[], approved: boolean) => {
+  const addItems = (texts: string[], approved: boolean, source: Source = 'okul') => {
     const added: string[] = [];
     const skipped: string[] = [];
     const errors: string[] = [];
@@ -7732,7 +8845,7 @@ function ContentManager({ state, update }: { state: AppState; update: (fn: (s: A
         id: uid(),
         type,
         text: v.text,
-        source: 'okul',
+        source,
         learnedAt: todayKey(),
         approved,
         active: true,
@@ -7801,7 +8914,7 @@ function ContentManager({ state, update }: { state: AppState; update: (fn: (s: A
         <div className="row gap wrap">
           <button className="btn primary" onClick={onAdd} disabled={!input.trim()}>Ekle</button>
           {SAMPLE[type].length > 0 && (
-            <button className="btn ghost" onClick={() => addItems(SAMPLE[type], true)}>
+            <button className="btn ghost" onClick={() => addItems(SAMPLE[type], true, 'ornek')}>
               Deneme için örnekleri ekle ({SAMPLE[type].join(', ')})
             </button>
           )}
@@ -7850,7 +8963,7 @@ function ContentManager({ state, update }: { state: AppState; update: (fn: (s: A
                   {editId === it.id && editErr && <p className="error-text small">{editErr}</p>}
                   <span className="item-meta">
                     <span className={'pill st-' + st}>{STATUS_LABEL[st]}</span>
-                    <span className="pill">{it.source === 'okul' ? 'Okul' : 'Öneri'}</span>
+                    <span className="pill">{it.source === 'okul' ? 'Ebeveyn' : it.source === 'ornek' ? 'Örnek' : 'Öneri'}</span>
                     {!it.approved && <span className="pill warn">Onay bekliyor</span>}
                     {!it.active && <span className="pill">Pasif</span>}
                     <span className="meta-text">
@@ -7906,6 +9019,7 @@ function SettingsPanel({
 
       <ProfilePhotoEditor state={state} update={update} />
       <InstallTip />
+      <RewardsSettingsCard state={state} update={update} />
 
       <div className="card">
         <h3>Okuma kontrolü</h3>
@@ -7953,12 +9067,12 @@ function SettingsPanel({
         <h3>Yazılış</h3>
         <p className="muted small">Harf, hece, kelime ve cümlelerin oyunlarda hangi harflerle gösterileceği.</p>
         <div className="seg">
-          {(['both', 'upper', 'lower', 'mixed'] as LetterCase[]).map((c) => (
+          {(['both', 'titleBoth', 'upper', 'title', 'lower', 'mixed'] as LetterCase[]).map((c) => (
             <button key={c} className={s.letterCase === c ? 'on' : ''} onClick={() => set({ letterCase: c })}>{CASE_LABEL[c]}</button>
           ))}
         </div>
         <p className="muted small">
-          Örnek: {s.letterCase === 'mixed' ? 'ANNE veya anne' : s.letterCase === 'upper' ? 'ANNE' : s.letterCase === 'lower' ? 'anne' : 'ANNE ve altında anne'}
+          Örnek: {s.letterCase === 'mixed' ? 'her turda ANNE, anne veya Anne' : caseConvs(s.letterCase as DisplayCase).map((c) => applyConv('anne', c)).join(' ve altında ')}. Kelime kartları, kutu oyunu, karaoke, anlam görseli ve çarklarda geçerlidir.
         </p>
       </div>
 
@@ -8158,12 +9272,14 @@ async function saveTextFile(name: string, text: string): Promise<'ok' | 'cancell
   }
 }
 
-function ProgressReset({ update }: { update: (fn: (s: AppState) => AppState) => void }) {
+function ProgressReset({ state, update }: { state: AppState; update: (fn: (s: AppState) => AppState) => void }) {
   const [stats, setStats] = useState(true);
   const [gift, setGift] = useState(true);
+
   const [done, setDone] = useState('');
   const run = async () => {
-    if (!(await askConfirm('Seviye, yıldızlar ve madalyalar sıfırlansın mı? Bu geri alınamaz. Heceler, kelimeler, ayarlar, PIN, fotoğraflar ve ses kayıtları korunur.'))) return;
+    if (!(await askConfirm('Seviye, yıldızlar ve madalyalar sıfırlansın mı? Heceler, kelimeler, ayarlar, PIN, fotoğraflar ve ses kayıtları korunur. Öncesinde bu cihaza otomatik bir kopya alınır.'))) return;
+    await Snap.save(state, 'İlerleme sıfırlama öncesi');
     update((s) => {
       const av = s.city.avatar;
       const lockedHat = (HATS.find((h) => h.id === av.hat) || { need: 0 }).need > 0;
@@ -8228,7 +9344,10 @@ function BackupPanel({ state, update }: { state: AppState; update: (fn: (s: AppS
     } catch (e) { /* medya olmadan devam */ }
     const r = await saveTextFile(fname, text);
     if (r === 'cancelled') return setMsg('');
-    if (r === 'ok') return setMsg('Yedek dosyası hazır: ' + fname + ' (' + Math.round(text.length / 1024) + ' KB)');
+    if (r === 'ok') {
+      setMeta({ lastManualBackupAt: Date.now() });
+      return setMsg('Yedek dosyası hazır: ' + fname + ' (' + Math.round(text.length / 1024) + ' KB)');
+    }
     setShowJson(true);
     setMsg('Dosya kaydetme burada kullanılamıyor; aşağıdaki metni kopyalayıp saklayabilirsiniz.');
   };
@@ -8241,6 +9360,7 @@ function BackupPanel({ state, update }: { state: AppState; update: (fn: (s: AppS
       if (!m) throw new Error('bad');
       const mediaCount = isFull && obj.media ? Object.keys(obj.media).length : 0;
       if (!(await askConfirm('Mevcut içerik ve ilerleme bu yedekle değiştirilsin mi? (' + m.items.length + ' içerik, ' + m.totalStars + ' yıldız' + (mediaCount ? ', ' + mediaCount + ' fotoğraf/ses' : '') + ') PIN\'iniz korunur.'))) return;
+      await Snap.save(state, 'Yedekten geri yükleme öncesi');
       if (mediaCount) await restoreMedia(obj.media);
       update((s) => ({ ...m, pinHash: s.pinHash, pinSalt: s.pinSalt }));
       setMsg('Yedek geri yüklendi: ' + m.items.length + ' içerik' + (mediaCount ? ', ' + mediaCount + ' fotoğraf/ses kaydı' : '') + '.');
@@ -8286,13 +9406,14 @@ function BackupPanel({ state, update }: { state: AppState; update: (fn: (s: AppS
         </label>
         <button className="btn ghost" disabled={!paste.trim()} onClick={() => importText(paste)}>Metinden geri yükle</button>
       </div>
-      <ProgressReset update={update} />
+      <ProgressReset state={state} update={update} />
       <div className="card">
         <h3>Her şeyi sil</h3>
         <button
           className="btn danger"
           onClick={async () => {
-            if (!(await askConfirm('Tüm içerik, ilerleme ve yıldızlar silinsin mi? Bu geri alınamaz.'))) return;
+            if (!(await askConfirm('Tüm içerik, ilerleme ve yıldızlar silinsin mi? Öncesinde bu cihaza otomatik bir kopya alınır (Veri durumu bölümünden geri yüklenebilir).'))) return;
+            await Snap.save(state, 'Tümünü silme öncesi');
             update((s) => ({ ...defaultState(), pinHash: s.pinHash, pinSalt: s.pinSalt, settings: s.settings }));
             setMsg('Tüm veriler silindi. Ayarlar ve PIN korundu.');
           }}
@@ -8311,7 +9432,9 @@ function BackupPanel({ state, update }: { state: AppState; update: (fn: (s: AppS
 function App() {
   const [state, setState] = useState<AppState>(() => loadLocal() || defaultState());
   const [screen, setScreen] = useState<Screen>('start');
-  const [gate, setGate] = useState<null | 'parent' | 'continue'>(null);
+  const [gate, setGate] = useState<null | 'parent' | 'continue' | 'restore'>(null);
+  const [recovery, setRecovery] = useState<SnapInfo | null>(null);
+  const [parentTab, setParentTab] = useState<'icerik' | 'yedek'>('icerik');
   const [burst, setBurst] = useState(0);
   const [queue, setQueue] = useState<Celebration[]>([]);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -8402,12 +9525,31 @@ function App() {
   // IndexedDB: açılışta oku, kalıcı depolama iste
   useEffect(() => {
     let off = false;
-    StateDB.load().then((raw) => {
+    StateDB.load().then(async (raw) => {
       if (off) return;
       const m = raw ? migrate(raw) : null;
-      if (m && m.updatedAt > stateRef.current.updatedAt) setState(m);
+      const useIdb = !!(m && m.updatedAt > stateRef.current.updatedAt);
+      if (useIdb) setState(m!);
+      // Güncelleme veya yeni sürüm öncesi: eski verinin ham kopyası saklanır (hiçbir şey silinmez)
+      const meta = await getMeta();
+      const src = useIdb ? raw : BOOT.raw || raw;
+      const fromVer = src ? Number(src.version) || 1 : SCHEMA_VERSION;
+      if (src && summarize(src).items + summarize(src).stars > 0 && (meta.lastBuild !== APP_BUILD || fromVer < SCHEMA_VERSION)) {
+        await Snap.save(src, fromVer < SCHEMA_VERSION ? 'Güncelleme öncesi (veri sürümü ' + fromVer + ')' : 'Yeni uygulama sürümü öncesi');
+        await setMeta({ lastMigrationAt: Date.now(), lastMigrationFrom: fromVer });
+      }
+      await setMeta({ lastBuild: APP_BUILD });
       StateDB.ready = true;
-      StateDB.save(m && m.updatedAt > stateRef.current.updatedAt ? m : stateRef.current);
+      StateDB.save(useIdb ? m! : stateRef.current);
+      // Bütünlük: içerik boşsa ama bu cihazda dolu bir kopya varsa geri yükleme öner
+      const cur = useIdb ? m! : stateRef.current;
+      if (!cur.items.length) {
+        const best = (await Snap.list()).find((x) => x.items > 0);
+        if (best && !off) setRecovery(best);
+      } else if (!meta.lastAutoBackupAt || Date.now() - meta.lastAutoBackupAt > 20 * 3600 * 1000) {
+        await Snap.save(cur, 'Günlük otomatik kopya');
+        await setMeta({ lastAutoBackupAt: Date.now() });
+      }
     });
     try {
       const st: any = navigator.storage;
@@ -8560,7 +9702,7 @@ function App() {
         }
         gift = { ...gift, seen: gift.opened.length, celebrated: gift.celebrated || won };
       }
-      cels.push({ kind: 'mission', number: done, unlocks: unlocksAt(done), piece, won });
+      cels.push({ kind: 'mission', number: done, unlocks: unlocksAt(done, cur.settings.vehicleRewards), piece, won });
     }
     update((s) => {
       const k = todayKey();
@@ -8683,6 +9825,9 @@ function App() {
     content = (
       <GameStart
         state={state}
+        recovery={recovery}
+        onRecover={() => setGate('restore')}
+        onDismissRecovery={() => setRecovery(null)}
         animations={animations}
         onStart={() => {
           CloudVoice.unlock();
@@ -8715,8 +9860,9 @@ function App() {
     content = <GiftScreen state={state} onBack={() => setScreen('home')} animations={animations} />;
   } else if (screen === 'game-birlestir') {
     content = (
-      <BuildGame
+      <BoxGame
         state={state}
+        update={update}
         onHome={() => setScreen('home')}
         onCommitSuccess={commitSuccess}
         onAttempt={recordAttempt}
@@ -8758,7 +9904,16 @@ function App() {
       />
     );
   } else if (screen === 'parent') {
-    content = <ParentPanel state={state} update={update} onClose={() => setScreen('home')} syncLabel={syncLabel} voices={voices} />;
+    content = (
+      <ParentPanel
+        state={state}
+        update={update}
+        onClose={() => setScreen('home')}
+        syncLabel={syncLabel}
+        voices={voices}
+        initialTab={parentTab}
+      />
+    );
   } else if (screen === 'game-hece' || screen === 'game-kelime') {
     content = (
       <WheelGame
@@ -8807,10 +9962,16 @@ function App() {
         <PinGate
           state={state}
           update={update}
-          purpose={gate === 'parent' ? 'Ebeveyn paneline girmek için.' : 'Oyuna devam etmek için ebeveyn onayı.'}
+          purpose={gate === 'parent' ? 'Ebeveyn paneline girmek için.' : gate === 'restore' ? 'Kayıtlı verileri geri yüklemek için.' : 'Oyuna devam etmek için ebeveyn onayı.'}
           onCancel={() => setGate(null)}
           onPass={() => {
-            if (gate === 'parent') setScreen('parent');
+            if (gate === 'restore') {
+              setParentTab('yedek');
+              setScreen('parent');
+            } else if (gate === 'parent') {
+              setParentTab('icerik');
+              setScreen('parent');
+            }
             else { setElapsed(0); setScreen('home'); }
             setGate(null);
           }}

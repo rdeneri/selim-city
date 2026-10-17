@@ -209,6 +209,20 @@ Claude'daki önizleme ile bu uygulama farklı adreslerde çalıştığı için v
 
 Yedek; içerikleri, ilerlemeyi, yıldızları, hediye kartını, ayarları, fotoğrafları ve ses kayıtlarını taşır. PIN güvenlik nedeniyle yedeğe girmez, yeni cihazda yeniden belirlenir.
 
+### Önemli: Her zaman ana adresi kullanın
+
+Tarayıcılar verileri **adrese göre** ayrı saklar. Vercel her yayına `selim-city-abc123xyz-kullanici.vercel.app` gibi ayrı bir adres verir; bu adresler hiç güncellenmez. Uygulamayı yalnızca Vercel'deki **ana adresten** (Domains satırı) açın ve iPad'e oradan ekleyin. Uygulama yayına özel bir adreste açıldığını fark ederse ebeveyne uyarı gösterir. Adres değiştirmeniz gerekirse önce eski adreste **tam yedek** alıp yeni adreste geri yükleyin.
+
+### Veri güvenliği
+
+- Ana veri deposu IndexedDB'dir; hızlı açılış için localStorage'da ikinci bir kopya tutulur.
+- Her güncellemeden ve yeni uygulama sürümünden önce, ayrıca her gün bir kez, bu cihaza **otomatik kopya** alınır (son 8 kopya). Sıfırlama, tümünü silme ve yedekten geri yükleme öncesinde de kopya alınır.
+- Veri biçimi değişirse eski kayıtlar yeni biçime dönüştürülür; hiçbir kayıt silinmez. Dönüştürülemeyen kayıtlar ayrı bir "legacy" alanında saklanır.
+- Açılışta içerik listesi boşsa ama cihazda dolu bir kopya varsa, başlangıç ekranında ebeveyne geri yükleme önerilir (PIN ile).
+- Ebeveyn paneli › **Yedek** › **Veri durumu**: içerik sayıları, son kayıt, son manuel yedek ve son güncelleme tarihleri, kalıcı depolama durumu ve otomatik kopyalar (indir veya geri yükle).
+- "Deneme için örnekleri ekle" ile eklenenler "Örnek" olarak işaretlenir; ebeveynin girdiği içerikten ayrı görünür. Uygulama hiçbir içeriği kendiliğinden değiştirmez veya silmez.
+- Otomatik kopyalar aynı cihazdadır. Cihaz kaybına veya Safari verilerinin silinmesine karşı ayda bir **tam yedek** dosyası alın.
+
 ### Yeni sürümlere geçiş
 
 - Yeni bir sürüm yayınladığınızda service worker onu arka planda indirir; uygulama bir sonraki açılışta güncellenir.
