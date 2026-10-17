@@ -725,3 +725,4 @@ button,a,input,select,label,.lego-brick,.choice,.slot{touch-action:manipulation}
 @media (orientation:landscape) and (min-width:700px){
   .box-screen .box-row.n4{grid-template-columns:repeat(4,1fr)}
 }
+.thumb-fail{width:56%;aspect-ratio:1;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:"Lilita One",sans-serif;font-size:32px;color:#9AA6BD;border:4px dashed #C9D6EE}

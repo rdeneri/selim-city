@@ -2750,11 +2750,26 @@ function GiftManager({ state, update }: { state: AppState; update: (fn: (s: AppS
 const HAS_WEBGL = (() => {
   try {
     const c = document.createElement('canvas');
-    return typeof THREE !== 'undefined' && !!THREE && !!(c.getContext('webgl') || c.getContext('experimental-webgl'));
+    const gl: any = c.getContext('webgl') || c.getContext('experimental-webgl');
+    const ok = typeof THREE !== 'undefined' && !!THREE && !!gl;
+    // Test bağlamını hemen kapat: Safari'nin bağlam sınırını boşuna doldurmasın
+    try {
+      const ext = gl && gl.getExtension('WEBGL_lose_context');
+      if (ext) ext.loseContext();
+    } catch (e) { /* yoksay */ }
+    return ok;
   } catch (e) {
     return false;
   }
 })();
+
+/** Paylaşılan (önbellekteki) geometriler hariç, bir nesnenin GPU belleğini serbest bırakır. */
+function disposeObject(obj: any) {
+  const shared = Object.values(GEO);
+  obj.traverse((o: any) => {
+    if (o.geometry && !shared.includes(o.geometry)) o.geometry.dispose();
+  });
+}
 
 const MAT_CACHE: Record<string, any> = {};
 function mat(color: string, opts: any = {}): any {
@@ -3243,10 +3258,15 @@ const Thumbs = {
     if (Thumbs.cache[key]) return Thumbs.cache[key];
     if (!HAS_WEBGL) return '';
     try {
+      if (Thumbs.renderer && Thumbs.renderer.getContext().isContextLost()) Thumbs.renderer = null;
       if (!Thumbs.renderer) {
         const r = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
         r.setSize(256, 256);
         r.setPixelRatio(1);
+        r.domElement.addEventListener('webglcontextlost', (e: any) => {
+          e.preventDefault();
+          if (Thumbs.renderer === r) Thumbs.renderer = null;
+        });
         Thumbs.renderer = r;
       }
       const cur = Thumbs.renderer.getSize(new THREE.Vector2());
@@ -3276,11 +3296,20 @@ const Thumbs = {
         cam.position.set(4.4, 3.6, 5.6);
         cam.lookAt(0, 0.9, 0);
       }
-      Thumbs.renderer.render(scene, cam);
-      const url = Thumbs.renderer.domElement.toDataURL('image/png');
+      const r = Thumbs.renderer;
+      r.render(scene, cam);
+      const url = r.domElement.toDataURL('image/png');
+      disposeObject(obj);
+      if (r.renderLists) r.renderLists.dispose();
+      // Bağlam bu sırada kaybolduysa görsel boştur: saklama, yeniden denensin
+      if (r.getContext().isContextLost()) {
+        Thumbs.renderer = null;
+        return '';
+      }
       Thumbs.cache[key] = url;
       return url;
     } catch (e) {
+      Thumbs.renderer = null;
       return '';
     }
   },
@@ -3340,19 +3369,33 @@ function pumpThumbs() {
 }
 function LazyThumb({ k, make }: { k: string; make: () => string }) {
   const [src, setSrc] = useState<string>(Thumbs.cache[k] || '');
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     if (Thumbs.cache[k]) {
       setSrc(Thumbs.cache[k]);
       return;
     }
     let off = false;
-    thumbQueue.push(() => {
-      if (!off) setSrc(make());
-    });
+    let tries = 0;
+    const job = () => {
+      if (off) return;
+      const u = make();
+      if (u) setSrc(u);
+      else if (++tries < 4) setTimeout(() => {
+        if (off) return;
+        thumbQueue.push(job);
+        if (!thumbBusy) pumpThumbs();
+      }, 600 * tries);
+      else setFailed(true);
+    };
+    setSrc('');
+    setFailed(false);
+    thumbQueue.push(job);
     if (!thumbBusy) pumpThumbs();
     return () => { off = true; };
   }, [k]);
-  return src ? <img src={src} alt="" /> : <span className="thumb-wait" aria-hidden="true" />;
+  if (src) return <img src={src} alt="" />;
+  return failed ? <span className="thumb-fail" aria-hidden="true">?</span> : <span className="thumb-wait" aria-hidden="true" />;
 }
 
 function PlayerPortrait({ a, size = 64, photo = false }: { a: Avatar; size?: number; photo?: boolean }) {
@@ -3964,7 +4007,7 @@ function createWorld(opts: {
   player.position.set(home.x + 3.6, 0.3, home.z + 3.6);
   player.rotation.y = Math.PI / 4;
   world.add(player);
-  const myCar = makeCar(opts.avatar.car, opts.avatar.carColor);
+  const myCar = makeCar(opts.avatar.car, vehicleColor(opts.avatar.car, opts.avatar.carColor));
   myCar.scale.setScalar(0.7);
   myCar.position.set(home.x + 2.1, 0.3, home.z + 4.2);
   myCar.rotation.y = Math.PI / 2;
@@ -4622,6 +4665,12 @@ function GameStart({
 function Showroom({ a }: { a: Avatar }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const key = JSON.stringify(a);
+  const aRef = useRef(a);
+  aRef.current = a;
+  const world = useRef<null | { turn: any; models: any[]; place: (av: Avatar) => void }>(null);
+  const [lost, setLost] = useState(0);
+
+  // Sahne ve WebGL bağlamı yalnızca bir kez kurulur (her renk/kıyafet değişiminde değil).
   useEffect(() => {
     const el = ref.current;
     if (!el || !HAS_WEBGL) return;
@@ -4635,6 +4684,17 @@ function Showroom({ a }: { a: Avatar }) {
       renderer.setSize(w, h);
       renderer.shadowMap.enabled = true;
       el.appendChild(renderer.domElement);
+      renderer.domElement.addEventListener('webglcontextlost', (e: any) => {
+        e.preventDefault();
+        const again = () => {
+          if (document.visibilityState === 'visible') {
+            document.removeEventListener('visibilitychange', again);
+            setLost((n) => n + 1);
+          }
+        };
+        document.addEventListener('visibilitychange', again);
+        setTimeout(again, 300);
+      });
       const scene = new THREE.Scene();
       scene.add(new THREE.HemisphereLight('#ffffff', '#8aa0c8', 0.8));
       const dl = new THREE.DirectionalLight('#fff4e0', 0.9);
@@ -4648,15 +4708,26 @@ function Showroom({ a }: { a: Avatar }) {
       plate.receiveShadow = true;
       for (let i = -3; i <= 3; i += 1.5) for (let k = -3; k <= 3; k += 1.5) if (i * i + k * k < 14) studs.add('#5A6278', i, 0, k);
       studs.build(turn);
-      const fig = makeMinifig(a);
-      fig.position.set(-1.7, 0.2, 0.6);
-      fig.rotation.y = 0.4;
-      turn.add(fig);
-      const car = makeCar(a.car, a.carColor);
-      car.position.set(1.4, 0.2, -0.4);
-      car.rotation.y = -0.5;
-      turn.add(car);
       scene.add(turn);
+      const place = (av: Avatar) => {
+        const wr = world.current;
+        if (!wr) return;
+        wr.models.forEach((m) => {
+          wr.turn.remove(m);
+          disposeObject(m);
+        });
+        const fig = makeMinifig(av);
+        fig.position.set(-1.7, 0.2, 0.6);
+        fig.rotation.y = 0.4;
+        const car = makeCar(av.car, vehicleColor(av.car, av.carColor));
+        car.position.set(1.4, 0.2, -0.4);
+        car.rotation.y = -0.5;
+        wr.turn.add(fig);
+        wr.turn.add(car);
+        wr.models = [fig, car];
+      };
+      world.current = { turn, models: [], place };
+      place(aRef.current);
       const cam = new THREE.PerspectiveCamera(30, w / h, 0.1, 100);
       cam.position.set(0, 5.5, 12.5);
       cam.lookAt(0, 1.3, 0);
@@ -4669,13 +4740,21 @@ function Showroom({ a }: { a: Avatar }) {
     } catch (e) { /* yoksay */ }
     return () => {
       cancelAnimationFrame(raf);
+      if (world.current) world.current.models.forEach((m) => disposeObject(m));
+      world.current = null;
       if (renderer) {
         renderer.dispose();
         if (renderer.forceContextLoss) renderer.forceContextLoss();
         if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
       }
     };
+  }, [lost]);
+
+  // Karakter veya araç değişince yalnızca modeller yenilenir; bağlam aynı kalır.
+  useEffect(() => {
+    if (world.current) world.current.place(a);
   }, [key]);
+
   return (
     <div className="showroom" ref={ref}>
       {!HAS_WEBGL && (
@@ -4752,7 +4831,7 @@ function GarageScreen({
       <div className="g-grid">
         {tab === 'araba' &&
           activeCars(state).map((c) => {
-            const col = (c as any).real || VEHICLE_BUILDERS[c.id] ? a.carColor : undefined;
+            const col = vehicleColor(c.id, a.carColor);
             return card(c.id, c.name + ((c as any).special ? ' ★' : ''), c.need, <LazyThumb k={'car:' + c.id + ':' + (col || '')} make={() => Thumbs.car(c.id, col)} />, a.car === c.id, () => set({ car: c.id }));
           })}
         {tab === 'kiyafet' && OUTFITS.map((o) => card(o.id, o.name, o.need, <LazyThumb k={'fig:' + JSON.stringify({ ...a, outfit: o.id })} make={() => Thumbs.fig({ ...a, outfit: o.id })} />, a.outfit === o.id, () => set({ outfit: o.id })))}
@@ -8323,6 +8402,12 @@ const VEHICLE_BUILDERS: Record<string, (color?: string) => any> = {
   },
 };
 
+/** Kimlik rengi olan araçlar (taksi, itfaiye, ambulans…) seçilen boyayı almaz; diğerleri alır. */
+const FIXED_COLOR_VEHICLES = ['taksi', 'dondurma', 'itfaiye', 'ambulans', 'uzayaraci', 'ucak'];
+function vehicleColor(id: string, carColor?: string): string | undefined {
+  return FIXED_COLOR_VEHICLES.includes(id) ? undefined : carColor;
+}
+
 function activeCars(state: AppState): Unlockable[] {
   const vr = state.settings.vehicleRewards || {};
   return CARS.filter((c) => c.need === 0 || vr[c.id] !== false);
@@ -8387,6 +8472,7 @@ function BoxGame({
   const [msg, setMsg] = useState('');
   const [shake, setShake] = useState<string | null>(null);
   const [pop, setPop] = useState<string | null>(null);
+  const [hintShown, setHintShown] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const ghost = useRef<HTMLDivElement | null>(null);
@@ -8477,9 +8563,15 @@ function BoxGame({
     if (!r) return;
     const desc = BOX_MODES.find((x) => x.id === m)!.desc;
     setMsg(r.note || desc);
+    setHintShown(false);
     if (m === 'dinle' && r.target) {
       const t = r.target;
       Speech.speak('Duyduğun kelimeyi kutuya koy.', { role: 'teacher' }).then(() => Speech.speak(trLower(t.text), { keep: true, rate: Speech.contentRate + 0.1 }));
+    } else if (m === 'hece') {
+      // Hedef kelime söylenir: çocuk hangi kelimeyi kuracağını bilir
+      const t = r.primary;
+      setMsg('Bu kelimeyi heceleriyle yap. Dinlemek için hoparlöre dokun.');
+      Speech.speak('Bu kelimeyi heceleriyle yap.', { role: 'teacher' }).then(() => Speech.speak(trLower(t.text), { keep: true, rate: Speech.contentRate + 0.1 }));
     } else Speech.speak(desc, { role: 'teacher' });
   };
 
@@ -8542,6 +8634,7 @@ function BoxGame({
       const tries = retries + 1;
       setRetries(tries);
       onAttempt(round.primary.id);
+      if (tries >= 2 && mode === 'hece') setHintShown(true);
       if (tries <= 2) {
         const m = pick('retry', name);
         setMsg(m);
@@ -8646,6 +8739,21 @@ function BoxGame({
         <GameEmpty a={state.city.avatar} title="Bu mod için kelime yetmedi" text="Başka bir mod seç ya da ebeveyn panelinden kelime ekle." onHome={onHome} />
       ) : (
         <>
+          {mode === 'hece' && !done && (
+            <div className="kid-actions">
+              {(state.wordImages[round.primary.id] || MEANINGS[normalize(round.primary.text)]) && (
+                <MeaningImage item={round.primary} state={state} className="box-img" />
+              )}
+              <button className="game-btn soft" onClick={() => Speech.speak(trLower(round.primary.text), { rate: Speech.contentRate + 0.1 })}>
+                🔊 Kelimeyi dinle
+              </button>
+              {hintShown && (
+                <p className="session-note">
+                  İpucu: <CaseText text={round.primary.text} mode={round.caseMode} />
+                </p>
+              )}
+            </div>
+          )}
           <div className={'box-row n' + round.boxes.length + (mode === 'hece' ? ' slots' : '')}>
             {round.boxes.map((b) => {
               const filled = b.filled ? round.cards.find((c) => c.id === b.filled) : null;
